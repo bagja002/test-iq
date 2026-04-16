@@ -1,0 +1,91 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: iq_test
+      MYSQL_USER: iq_user
+      MYSQL_PASSWORD: iq_password
+      MYSQL_ROOT_PASSWORD: root_password
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      PORT: 8080
+      FRONTEND_URL: http://localhost
+      MYSQL_DSN: iq_user:iq_password@tcp(mysql:3306)/iq_test?charset=utf8mb4&parseTime=True&loc=Local&multiStatements=true
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: replace-this-secret
+      ACCESS_TOKEN_TTL: 30m
+      REFRESH_TOKEN_TTL: 168h
+      COOKIE_SECURE: "false"
+      COOKIE_DOMAIN: ""
+      AUTO_RUN_MIGRATIONS: "true"
+      SEED_DEMO_DATA: "true"
+      RATE_LIMIT_MAX: "20"
+      DB_MAX_OPEN_CONNS: "40"
+      DB_MAX_IDLE_CONNS: "20"
+      DB_CONN_MAX_LIFETIME: 15m
+      SLOW_QUERY_THRESHOLD: 250ms
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ""
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      API_URL: http://api:8080
+      NEXT_PUBLIC_API_URL: ""
+    depends_on:
+      api:
+        condition: service_started
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - web
+      - api
+
+volumes:
+  mysql-data:
+  redis-data:

@@ -1,0 +1,192 @@
+export type Role = "USER" | "ADMIN"
+export type AttemptStatus = "IN_PROGRESS" | "SUBMITTED" | "EXPIRED"
+export type AttemptSectionStatus = "NOT_STARTED" | "IN_PROGRESS" | "SUBMITTED" | "EXPIRED"
+export type QuestionStatus = "DRAFT" | "PUBLISHED" | "ARCHIVED"
+export type UserStatus = "ACTIVE" | "INACTIVE"
+export type QuestionIndex = "VCI" | "PRI" | "WMI" | "PSI"
+
+export interface ApiError {
+  message: string
+  details?: string
+}
+
+export interface SessionUser {
+  id: number
+  name: string
+  email: string
+  role: Role
+}
+
+export interface SessionResponse {
+  authenticated: boolean
+  user: SessionUser | null
+}
+
+export interface LoginRequest {
+  email: string
+  password: string
+}
+
+export interface RegisterRequest {
+  name: string
+  email: string
+  password: string
+}
+
+export interface LoginResponse {
+  message: string
+  user: SessionUser
+}
+
+export interface QuestionOptionInput {
+  key: string
+  content: string
+  mediaUrl?: string
+  mediaAlt?: string
+  isCorrect?: boolean
+}
+
+export interface QuestionPayload {
+  prompt: string
+  promptMediaUrl?: string
+  promptMediaAlt?: string
+  difficulty?: string
+  questionIndex: QuestionIndex
+  subtestCode: string
+  status: QuestionStatus
+  options: QuestionOptionInput[]
+}
+
+export interface QuestionSummary {
+  id: number
+  prompt: string
+  promptMediaUrl: string | null
+  promptMediaAlt: string | null
+  difficulty: string
+  questionIndex: QuestionIndex | null
+  questionIndexLabel: string | null
+  subtestCode: string | null
+  subtestLabel: string | null
+  status: QuestionStatus
+  hasOptionMedia: boolean
+  optionCount: number
+  updatedAt: string
+}
+
+export interface TestConfigResponse {
+  id: number
+  title: string
+  durationMinutes: number
+  questionCount: number
+  isActive: boolean
+  updatedAt: string
+}
+
+export interface AttemptQuestionOption {
+  key: string
+  content: string
+  mediaUrl: string
+  mediaAlt: string
+}
+
+export interface AttemptQuestion {
+  id: number
+  questionId: number
+  orderNo: number
+  questionIndex: QuestionIndex | null
+  questionIndexLabel: string | null
+  subtestCode: string | null
+  subtestLabel: string | null
+  prompt: string
+  promptMediaUrl: string
+  promptMediaAlt: string
+  options: AttemptQuestionOption[]
+  selectedOptionKey: string | null
+}
+
+export interface AttemptSection {
+  id: number
+  code: QuestionIndex
+  label: string
+  orderNo: number
+  status: AttemptSectionStatus
+  durationMinutes: number
+  questionCount: number
+  answeredCount: number
+  startedAt: string | null
+  expiresAt: string | null
+  submittedAt: string | null
+}
+
+export interface AttemptDetail {
+  id: number
+  status: AttemptStatus
+  startedAt: string
+  expiresAt: string
+  submittedAt: string | null
+  durationMinutes: number
+  rawScore: number | null
+  totalQuestions: number
+  percentage: number | null
+  sections: AttemptSection[]
+  questions: AttemptQuestion[]
+}
+
+export interface AttemptSummary {
+  id: number
+  status: AttemptStatus
+  startedAt: string
+  expiresAt: string
+  submittedAt: string | null
+  rawScore: number | null
+  totalQuestions: number
+  percentage: number | null
+}
+
+export interface IndexScore {
+  code: QuestionIndex
+  label: string
+  correct: number
+  total: number
+  percentage: number
+}
+
+export interface AttemptResult extends AttemptSummary {
+  estimatedIq: number | null
+  classificationLabel: string | null
+  indexScores: IndexScore[]
+}
+
+export interface SaveAnswersRequest {
+  answers: Array<{
+    attemptQuestionId: number
+    selectedOptionKey: string
+  }>
+}
+
+export interface ResultResponse {
+  attempt: AttemptResult | null
+}
+
+export interface UserSummary {
+  id: number
+  name: string
+  email: string
+  role: Role
+  status: UserStatus
+  createdAt: string
+}
+
+export interface AdminResultSummary {
+  attemptId: number
+  userId: number
+  userName: string
+  email: string
+  rawScore: number
+  totalQuestions: number
+  percentage: number
+  submittedAt: string
+  durationMinutes: number
+  estimatedIq: number
+  classificationLabel: string
+}
