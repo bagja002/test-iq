@@ -22,15 +22,22 @@ import (
 
 const (
 	proUpgradeProductCode = "PRO_UPGRADE"
-	proUpgradeAmount      = 500
+	maxUpgradeProductCode = "MAX_UPGRADE"
+	proUpgradeAmount      = 400
+	maxUpgradeAmount      = 500
 )
 
-type CreateProUpgradePaymentResult struct {
+type CreateUpgradePaymentResult struct {
 	OrderID     string `json:"orderId"`
 	SnapToken   string `json:"snapToken"`
 	RedirectURL string `json:"redirectUrl"`
 	Amount      int    `json:"amount"`
 	Status      string `json:"status"`
+	AccountType string `json:"accountType"`
+}
+
+type CreateUpgradePaymentInput struct {
+	AccountType models.AccountType `json:"accountType"`
 }
 
 type ConfirmPaymentInput struct {
@@ -61,6 +68,14 @@ type midtransStatusResponse struct {
 	StatusMessage     string `json:"status_message"`
 }
 
+type upgradeProduct struct {
+	ProductCode string
+	AccountType models.AccountType
+	Amount      int
+	OrderPrefix string
+	ItemName    string
+}
+
 type PaymentService struct {
 	db     *gorm.DB
 	cfg    *config.Config
@@ -77,9 +92,17 @@ func NewPaymentService(db *gorm.DB, cfg *config.Config) *PaymentService {
 	}
 }
 
-func (s *PaymentService) CreateProUpgradePayment(user models.User) (*CreateProUpgradePaymentResult, error) {
-	if user.AccountType == models.AccountTypePaid {
-		return nil, errors.New("akun Anda sudah Pro")
+func (s *PaymentService) CreateUpgradePayment(user models.User, input CreateUpgradePaymentInput) (*CreateUpgradePaymentResult, error) {
+	product, err := resolveUpgradeProduct(input.AccountType)
+	if err != nil {
+		return nil, err
+	}
+	currentAccountType := canonicalAccountType(user.AccountType)
+	if currentAccountType == product.AccountType {
+		return nil, fmt.Errorf("akun Anda sudah %s", product.AccountType)
+	}
+	if currentAccountType == models.AccountTypeMax {
+		return nil, errors.New("akun Anda sudah MAX")
 	}
 	if strings.TrimSpace(s.cfg.MidtransServerKey) == "" {
 		return nil, errors.New("konfigurasi Midtrans belum lengkap")
@@ -87,38 +110,39 @@ func (s *PaymentService) CreateProUpgradePayment(user models.User) (*CreateProUp
 
 	var existing models.PaymentTransaction
 	if err := s.db.
-		Where("user_id = ? AND product_code = ? AND status IN ?", user.ID, proUpgradeProductCode, []models.PaymentStatus{
+		Where("user_id = ? AND product_code = ? AND status IN ?", user.ID, product.ProductCode, []models.PaymentStatus{
 			models.PaymentStatusInitiated,
 			models.PaymentStatusPending,
 		}).
 		Order("id DESC").
 		First(&existing).Error; err == nil {
-		return &CreateProUpgradePaymentResult{
+		return &CreateUpgradePaymentResult{
 			OrderID:     existing.OrderID,
 			SnapToken:   existing.SnapToken,
 			RedirectURL: existing.RedirectURL,
 			Amount:      existing.Amount,
 			Status:      string(existing.Status),
+			AccountType: string(product.AccountType),
 		}, nil
 	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
 
-	orderID := fmt.Sprintf("PRO-%d-%d", user.ID, time.Now().Unix())
+	orderID := fmt.Sprintf("%s-%d-%d", product.OrderPrefix, user.ID, time.Now().Unix())
 	payload := fiberMap{
 		"transaction_details": fiberMap{
 			"order_id":     orderID,
-			"gross_amount": proUpgradeAmount,
+			"gross_amount": product.Amount,
 		},
 		"credit_card": fiberMap{
 			"secure": true,
 		},
 		"item_details": []fiberMap{
 			{
-				"id":       proUpgradeProductCode,
-				"price":    proUpgradeAmount,
+				"id":       product.ProductCode,
+				"price":    product.Amount,
 				"quantity": 1,
-				"name":     "Upgrade Akun Pro",
+				"name":     product.ItemName,
 			},
 		},
 		"customer_details": fiberMap{
@@ -153,8 +177,8 @@ func (s *PaymentService) CreateProUpgradePayment(user models.User) (*CreateProUp
 	record := models.PaymentTransaction{
 		UserID:            user.ID,
 		OrderID:           orderID,
-		ProductCode:       proUpgradeProductCode,
-		Amount:            proUpgradeAmount,
+		ProductCode:       product.ProductCode,
+		Amount:            product.Amount,
 		Status:            models.PaymentStatusInitiated,
 		SnapToken:         snapRes.Token,
 		RedirectURL:       snapRes.RedirectURL,
@@ -171,12 +195,13 @@ func (s *PaymentService) CreateProUpgradePayment(user models.User) (*CreateProUp
 		return nil, err
 	}
 
-	return &CreateProUpgradePaymentResult{
+	return &CreateUpgradePaymentResult{
 		OrderID:     orderID,
 		SnapToken:   snapRes.Token,
 		RedirectURL: snapRes.RedirectURL,
-		Amount:      proUpgradeAmount,
+		Amount:      product.Amount,
 		Status:      string(record.Status),
+		AccountType: string(product.AccountType),
 	}, nil
 }
 
@@ -261,8 +286,14 @@ func (s *PaymentService) applyMidtransStatus(payload midtransStatusResponse) (*P
 		return nil, err
 	}
 
-	if nextStatus == models.PaymentStatusPaid && user.AccountType != models.AccountTypePaid {
-		user.AccountType = models.AccountTypePaid
+	if nextStatus == models.PaymentStatusPaid {
+		targetAccountType := accountTypeFromProductCode(payment.ProductCode)
+		if canonicalAccountType(user.AccountType) != targetAccountType {
+			user.AccountType = targetAccountType
+		}
+	}
+
+	if nextStatus == models.PaymentStatusPaid {
 		if err := tx.Model(&user).Update("account_type", user.AccountType).Error; err != nil {
 			tx.Rollback()
 			return nil, err
@@ -275,10 +306,44 @@ func (s *PaymentService) applyMidtransStatus(payload midtransStatusResponse) (*P
 
 	return &PaymentStatusResult{
 		OrderID:           payment.OrderID,
-		AccountType:       user.AccountType,
+		AccountType:       canonicalAccountType(user.AccountType),
 		PaymentStatus:     payment.Status,
 		TransactionStatus: payment.TransactionStatus,
 	}, nil
+}
+
+func resolveUpgradeProduct(accountType models.AccountType) (upgradeProduct, error) {
+	switch canonicalAccountType(accountType) {
+	case models.AccountTypePro:
+		return upgradeProduct{
+			ProductCode: proUpgradeProductCode,
+			AccountType: models.AccountTypePro,
+			Amount:      proUpgradeAmount,
+			OrderPrefix: "PRO",
+			ItemName:    "Upgrade Akun Pro",
+		}, nil
+	case models.AccountTypeMax:
+		return upgradeProduct{
+			ProductCode: maxUpgradeProductCode,
+			AccountType: models.AccountTypeMax,
+			Amount:      maxUpgradeAmount,
+			OrderPrefix: "MAX",
+			ItemName:    "Upgrade Akun Max",
+		}, nil
+	default:
+		return upgradeProduct{}, errors.New("paket upgrade tidak valid")
+	}
+}
+
+func accountTypeFromProductCode(productCode string) models.AccountType {
+	switch strings.TrimSpace(productCode) {
+	case proUpgradeProductCode:
+		return models.AccountTypePro
+	case maxUpgradeProductCode:
+		return models.AccountTypeMax
+	default:
+		return models.AccountTypeFree
+	}
 }
 
 func (s *PaymentService) fetchTransactionStatus(orderID string) (midtransStatusResponse, error) {

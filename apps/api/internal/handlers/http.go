@@ -50,7 +50,7 @@ func (h *Handler) Login(c fiber.Ctx) error {
 		return utils.RespondError(c, fiber.StatusBadRequest, "payload login tidak valid", err.Error())
 	}
 
-	user, accessToken, refreshToken, err := h.auth.Login(payload.Email, payload.Password)
+	user, accessToken, refreshToken, err := h.auth.Login(payload.Email, payload.Password, c.Get("User-Agent"))
 	if err != nil {
 		return utils.RespondError(c, fiber.StatusUnauthorized, err.Error(), "")
 	}
@@ -66,6 +66,7 @@ func (h *Handler) Login(c fiber.Ctx) error {
 func (h *Handler) Register(c fiber.Ctx) error {
 	var payload struct {
 		Name     string `json:"name"`
+		Position string `json:"position"`
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
@@ -74,7 +75,7 @@ func (h *Handler) Register(c fiber.Ctx) error {
 		return utils.RespondError(c, fiber.StatusBadRequest, "payload register tidak valid", err.Error())
 	}
 
-	user, accessToken, refreshToken, err := h.auth.Register(payload.Name, payload.Email, payload.Password)
+	user, accessToken, refreshToken, err := h.auth.Register(payload.Name, payload.Position, payload.Email, payload.Password)
 	if err != nil {
 		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
 	}
@@ -122,9 +123,14 @@ func (h *Handler) Session(c fiber.Ctx) error {
 	})
 }
 
-func (h *Handler) CreateProUpgradePayment(c fiber.Ctx) error {
+func (h *Handler) CreateUpgradePayment(c fiber.Ctx) error {
 	user, _ := middleware.CurrentUser(c)
-	result, err := h.pay.CreateProUpgradePayment(user)
+	var payload services.CreateUpgradePaymentInput
+	if err := c.Bind().Body(&payload); err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, "payload upgrade tidak valid", err.Error())
+	}
+
+	result, err := h.pay.CreateUpgradePayment(user, payload)
 	if err != nil {
 		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
 	}
@@ -136,10 +142,11 @@ func (h *Handler) CreateProUpgradePayment(c fiber.Ctx) error {
 		"redirectUrl": result.RedirectURL,
 		"amount":      result.Amount,
 		"status":      result.Status,
+		"accountType": result.AccountType,
 	})
 }
 
-func (h *Handler) ConfirmProUpgradePayment(c fiber.Ctx) error {
+func (h *Handler) ConfirmUpgradePayment(c fiber.Ctx) error {
 	user, _ := middleware.CurrentUser(c)
 	var payload services.ConfirmPaymentInput
 	if err := c.Bind().Body(&payload); err != nil {
@@ -527,10 +534,11 @@ func (h *Handler) ListUsers(c fiber.Ctx) error {
 		rows = append(rows, fiber.Map{
 			"id":          user.ID,
 			"name":        user.Name,
+			"position":    user.Position,
 			"email":       user.Email,
 			"role":        user.Role,
 			"status":      user.Status,
-			"accountType": user.AccountType,
+			"accountType": displayAccountType(user.AccountType),
 			"createdAt":   user.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
@@ -694,10 +702,22 @@ func serializeUser(user models.User) fiber.Map {
 	return fiber.Map{
 		"id":          user.ID,
 		"name":        user.Name,
+		"position":    user.Position,
 		"email":       user.Email,
 		"role":        user.Role,
 		"status":      user.Status,
-		"accountType": user.AccountType,
+		"accountType": displayAccountType(user.AccountType),
+	}
+}
+
+func displayAccountType(accountType models.AccountType) models.AccountType {
+	switch accountType {
+	case models.AccountTypePro:
+		return models.AccountTypePro
+	case models.AccountTypeMax, models.AccountTypePaid:
+		return models.AccountTypeMax
+	default:
+		return models.AccountTypeFree
 	}
 }
 

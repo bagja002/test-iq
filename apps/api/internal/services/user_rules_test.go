@@ -7,7 +7,7 @@ import (
 )
 
 func TestValidatePublicRegistration(t *testing.T) {
-	name, email, err := validatePublicRegistration("  Siti   Aminah  ", " Siti@example.com ", "password123")
+	name, position, email, err := validatePublicRegistration("  Siti   Aminah  ", " Pengelola   Koperasi ", " Siti@example.com ", "password123")
 	if err != nil {
 		t.Fatalf("expected registration payload to be valid, got error: %v", err)
 	}
@@ -19,12 +19,17 @@ func TestValidatePublicRegistration(t *testing.T) {
 	if email != "siti@example.com" {
 		t.Fatalf("expected normalized email to be %q, got %q", "siti@example.com", email)
 	}
+
+	if position != "Pengelola Koperasi" {
+		t.Fatalf("expected normalized position to be %q, got %q", "Pengelola Koperasi", position)
+	}
 }
 
 func TestValidatePublicRegistrationRejectsInvalidPayload(t *testing.T) {
 	testCases := []struct {
 		name        string
 		inputName   string
+		inputPos    string
 		inputEmail  string
 		inputPass   string
 		expectError string
@@ -32,13 +37,23 @@ func TestValidatePublicRegistrationRejectsInvalidPayload(t *testing.T) {
 		{
 			name:        "missing name",
 			inputName:   "",
+			inputPos:    "Staff Koperasi",
 			inputEmail:  "user@example.com",
 			inputPass:   "password123",
 			expectError: "nama wajib diisi",
 		},
 		{
+			name:        "missing position",
+			inputName:   "Budi",
+			inputPos:    "",
+			inputEmail:  "user@example.com",
+			inputPass:   "password123",
+			expectError: "jabatan wajib diisi",
+		},
+		{
 			name:        "invalid email",
 			inputName:   "Budi",
+			inputPos:    "Staff Koperasi",
 			inputEmail:  "not-an-email",
 			inputPass:   "password123",
 			expectError: "format email tidak valid",
@@ -46,6 +61,7 @@ func TestValidatePublicRegistrationRejectsInvalidPayload(t *testing.T) {
 		{
 			name:        "weak password",
 			inputName:   "Budi",
+			inputPos:    "Staff Koperasi",
 			inputEmail:  "budi@example.com",
 			inputPass:   "1234567",
 			expectError: "password minimal 8 karakter",
@@ -54,7 +70,7 @@ func TestValidatePublicRegistrationRejectsInvalidPayload(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := validatePublicRegistration(tc.inputName, tc.inputEmail, tc.inputPass)
+			_, _, _, err := validatePublicRegistration(tc.inputName, tc.inputPos, tc.inputEmail, tc.inputPass)
 			if err == nil || err.Error() != tc.expectError {
 				t.Fatalf("expected error %q, got %v", tc.expectError, err)
 			}
@@ -107,8 +123,8 @@ func TestNormalizeAccountType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected paid account type to be accepted, got error: %v", err)
 	}
-	if accountType != models.AccountTypePaid {
-		t.Fatalf("expected PAID account type, got %s", accountType)
+	if accountType != models.AccountTypeMax {
+		t.Fatalf("expected MAX account type, got %s", accountType)
 	}
 
 	if _, err := normalizeAccountType("TRIAL"); err == nil {

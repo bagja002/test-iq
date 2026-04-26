@@ -23,6 +23,7 @@ type QuestionPayload struct {
 
 type UserPayload struct {
 	Name        string             `json:"name"`
+	Position    string             `json:"position"`
 	Email       string             `json:"email"`
 	Password    string             `json:"password"`
 	Role        models.Role        `json:"role"`
@@ -32,6 +33,7 @@ type UserPayload struct {
 
 type UserUpdatePayload struct {
 	Name        *string             `json:"name"`
+	Position    *string             `json:"position"`
 	Role        *models.Role        `json:"role"`
 	Status      *models.UserStatus  `json:"status"`
 	AccountType *models.AccountType `json:"accountType"`
@@ -349,7 +351,7 @@ func (s *AdminService) ListUsers(search string, role string, status string, limi
 }
 
 func (s *AdminService) CreateUser(payload UserPayload) (*models.User, error) {
-	normalizedName, normalizedEmail, err := validatePublicRegistration(payload.Name, payload.Email, payload.Password)
+	normalizedName, normalizedPosition, normalizedEmail, err := validatePublicRegistration(payload.Name, payload.Position, payload.Email, payload.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -376,6 +378,7 @@ func (s *AdminService) CreateUser(payload UserPayload) (*models.User, error) {
 
 	user := models.User{
 		Name:         normalizedName,
+		Position:     normalizedPosition,
 		Email:        normalizedEmail,
 		PasswordHash: passwordHash,
 		Role:         role,
@@ -402,6 +405,13 @@ func (s *AdminService) UpdateUser(userID uint, payload UserUpdatePayload) (*mode
 			return nil, errors.New("nama wajib diisi")
 		}
 		user.Name = normalizedName
+	}
+	if payload.Position != nil {
+		normalizedPosition := normalizePosition(*payload.Position)
+		if normalizedPosition == "" {
+			return nil, errors.New("jabatan wajib diisi")
+		}
+		user.Position = normalizedPosition
 	}
 	if payload.Role != nil {
 		role, err := normalizeRole(*payload.Role)
@@ -860,7 +870,7 @@ func buildAdminConfigHealth(
 	}
 
 	var err error
-	effectiveQuestionCount := resolveQuestionCountForAccount(models.AccountTypePaid, config.TestType, config.QuestionCount)
+	effectiveQuestionCount := resolveQuestionCountForAccount(models.AccountTypeMax, config.TestType, config.QuestionCount)
 	if config.TestType == models.TestTypeSKB {
 		if available[models.QuestionIndexSKB] < effectiveQuestionCount {
 			err = errors.New("bank soal SKB untuk kamar ini belum mencukupi")

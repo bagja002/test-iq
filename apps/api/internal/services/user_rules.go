@@ -18,32 +18,45 @@ func normalizeEmail(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
-func validatePublicRegistration(name string, email string, password string) (string, string, error) {
+func normalizePosition(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+}
+
+func validatePublicRegistration(name string, position string, email string, password string) (string, string, string, error) {
 	normalizedName := normalizeName(name)
+	normalizedPosition := normalizePosition(position)
 	normalizedEmail := normalizeEmail(email)
 
 	if normalizedName == "" {
-		return "", "", errors.New("nama wajib diisi")
+		return "", "", "", errors.New("nama wajib diisi")
 	}
 
 	if len(normalizedName) < 3 {
-		return "", "", errors.New("nama minimal 3 karakter")
+		return "", "", "", errors.New("nama minimal 3 karakter")
+	}
+
+	if normalizedPosition == "" {
+		return "", "", "", errors.New("jabatan wajib diisi")
+	}
+
+	if len(normalizedPosition) < 3 {
+		return "", "", "", errors.New("jabatan minimal 3 karakter")
 	}
 
 	if normalizedEmail == "" {
-		return "", "", errors.New("email wajib diisi")
+		return "", "", "", errors.New("email wajib diisi")
 	}
 
 	parsedAddress, err := mail.ParseAddress(normalizedEmail)
 	if err != nil || parsedAddress.Address != normalizedEmail {
-		return "", "", errors.New("format email tidak valid")
+		return "", "", "", errors.New("format email tidak valid")
 	}
 
 	if len(strings.TrimSpace(password)) < 8 {
-		return "", "", errors.New("password minimal 8 karakter")
+		return "", "", "", errors.New("password minimal 8 karakter")
 	}
 
-	return normalizedName, normalizedEmail, nil
+	return normalizedName, normalizedPosition, normalizedEmail, nil
 }
 
 func normalizeRole(role models.Role) (models.Role, error) {
@@ -72,8 +85,10 @@ func normalizeAccountType(accountType models.AccountType) (models.AccountType, e
 	switch accountType {
 	case "", models.AccountTypeFree:
 		return models.AccountTypeFree, nil
-	case models.AccountTypePaid:
-		return models.AccountTypePaid, nil
+	case models.AccountTypePro:
+		return models.AccountTypePro, nil
+	case models.AccountTypeMax, models.AccountTypePaid:
+		return models.AccountTypeMax, nil
 	default:
 		return "", errors.New("tipe akun tidak valid")
 	}

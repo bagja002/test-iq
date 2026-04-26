@@ -71,8 +71,8 @@ func New(cfg *config.Config, db *gorm.DB) *fiber.App {
 	api.Get("/test-config/active", middleware.RequireAuth(), handler.GetTestConfig)
 
 	paymentGroup := api.Group("/payments", middleware.RequireAuth())
-	paymentGroup.Post("/pro-upgrade", submitLimiter, handler.CreateProUpgradePayment)
-	paymentGroup.Post("/pro-upgrade/confirm", submitLimiter, handler.ConfirmProUpgradePayment)
+	paymentGroup.Post("/upgrade", submitLimiter, handler.CreateUpgradePayment)
+	paymentGroup.Post("/upgrade/confirm", submitLimiter, handler.ConfirmUpgradePayment)
 
 	testGroup := api.Group("/test-attempts", middleware.RequireAuth())
 	testGroup.Post("/start", submitLimiter, handler.StartAttempt)

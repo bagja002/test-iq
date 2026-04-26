@@ -34,6 +34,8 @@ const (
 	UserStatusInactive UserStatus = "INACTIVE"
 
 	AccountTypeFree AccountType = "FREE"
+	AccountTypePro  AccountType = "PRO"
+	AccountTypeMax  AccountType = "MAX"
 	AccountTypePaid AccountType = "PAID"
 
 	PaymentStatusInitiated PaymentStatus = "INITIATED"
@@ -60,6 +62,7 @@ const (
 type User struct {
 	ID           uint        `gorm:"primaryKey" json:"id"`
 	Name         string      `gorm:"size:120;not null" json:"name"`
+	Position     string      `gorm:"size:191;not null;default:''" json:"position"`
 	Email        string      `gorm:"size:191;not null;uniqueIndex" json:"email"`
 	PasswordHash string      `gorm:"size:255;not null" json:"-"`
 	Role         Role        `gorm:"size:20;not null;index" json:"role"`
@@ -67,6 +70,17 @@ type User struct {
 	AccountType  AccountType `gorm:"size:20;not null;default:'FREE';index" json:"accountType"`
 	CreatedAt    time.Time   `json:"createdAt"`
 	UpdatedAt    time.Time   `json:"updatedAt"`
+}
+
+type UserDevice struct {
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	UserID        uint      `gorm:"not null;uniqueIndex:uidx_user_device_hash,priority:1;index" json:"userId"`
+	UserAgent     string    `gorm:"size:512;not null" json:"userAgent"`
+	UserAgentHash string    `gorm:"size:64;not null;uniqueIndex:uidx_user_device_hash,priority:2" json:"userAgentHash"`
+	FirstSeenAt   time.Time `gorm:"not null" json:"firstSeenAt"`
+	LastSeenAt    time.Time `gorm:"not null" json:"lastSeenAt"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 type Question struct {

@@ -136,6 +136,11 @@ func (s *TestService) StartAttempt(user models.User, input StartAttemptInput) (*
 		return nil, err
 	}
 
+	if err := ensureDailySubmitQuota(tx, user.ID, user.AccountType, testType, now); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
 	var config models.TestConfig
 	if err := tx.Where("is_active = ? AND test_type = ? AND room_code IN ?", true, testType, roomCodes).Order("id DESC").First(&config).Error; err != nil {
 		tx.Rollback()
@@ -780,6 +785,11 @@ func (s *TestService) SubmitAttempt(userID uint, attemptID uint) (*models.Attemp
 		return nil, fmt.Errorf("selesaikan bagian %s terlebih dahulu", attemptSectionLabel(nextSection.QuestionIndex))
 	}
 
+	if err := ensureDailySubmitQuota(tx, userID, attemptUserAccountType(tx, attempt.UserID), attempt.TestType, now); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
 	rawScore, totalQuestions, percentage := ScoreAttempt(questions, answerMap)
 	attempt.Status = models.AttemptStatusSubmitted
 	attempt.SubmittedAt = &now
@@ -988,17 +998,17 @@ func valueOrZero(value *float64) float64 {
 }
 
 func validateAccountTestAccess(accountType models.AccountType, testType models.TestType) error {
-	if accountType == models.AccountTypePaid {
+	if hasPaidAccess(accountType) {
 		return nil
 	}
 	if testType == models.TestTypeSKB {
-		return errors.New("akun gratis belum bisa mengakses SKB, silakan upgrade ke akun bayar")
+		return errors.New("akun gratis belum bisa mengakses SKB, silakan upgrade ke akun Pro atau Max")
 	}
 	return nil
 }
 
 func resolveQuestionCountForAccount(accountType models.AccountType, testType models.TestType, configuredQuestionCount int) int {
-	if accountType == models.AccountTypeFree && testType == models.TestTypeIQ {
+	if canonicalAccountType(accountType) == models.AccountTypeFree && testType == models.TestTypeIQ {
 		if configuredQuestionCount > 0 && configuredQuestionCount < freeIQQuestionLimit {
 			return configuredQuestionCount
 		}
@@ -1013,6 +1023,44 @@ func resolveQuestionCountForAccount(accountType models.AccountType, testType mod
 	default:
 		return configuredQuestionCount
 	}
+}
+
+func ensureDailySubmitQuota(tx *gorm.DB, userID uint, accountType models.AccountType, testType models.TestType, now time.Time) error {
+	limit := dailySubmitLimit(accountType, testType)
+	if limit <= 0 {
+		return nil
+	}
+
+	startOfDay, endOfDay := jakartaDayRange(now)
+	var submittedCount int64
+	if err := tx.Model(&models.Attempt{}).
+		Where("user_id = ? AND test_type = ? AND status = ? AND submitted_at >= ? AND submitted_at < ?", userID, testType, models.AttemptStatusSubmitted, startOfDay, endOfDay).
+		Count(&submittedCount).Error; err != nil {
+		return err
+	}
+	if submittedCount >= int64(limit) {
+		return fmt.Errorf("batas submit harian untuk %s sudah tercapai (%d kali)", testType, limit)
+	}
+	return nil
+}
+
+func attemptUserAccountType(tx *gorm.DB, userID uint) models.AccountType {
+	var user models.User
+	if err := tx.Select("id, account_type").First(&user, userID).Error; err != nil {
+		return models.AccountTypeFree
+	}
+	return user.AccountType
+}
+
+func jakartaDayRange(now time.Time) (time.Time, time.Time) {
+	location, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		location = time.FixedZone("WIB", 7*60*60)
+	}
+
+	localNow := now.In(location)
+	start := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, location)
+	return start, start.Add(24 * time.Hour)
 }
 
 func ensureAttemptAllowedForUser(tx *gorm.DB, userID uint, testType models.TestType) error {
