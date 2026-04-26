@@ -20,11 +20,25 @@ var orderedQuestionIndices = []models.QuestionIndex{
 	models.QuestionIndexPSI,
 }
 
+var orderedSKBRoomCodes = []string{
+	"MANAJER_KOPERASI_KDMP",
+	"MANAGER_OPERASIONAL_KNMP",
+	"KEPALA_PRODUKSI",
+	"PENGELOLA_KEUANGAN",
+	"PENJAMIN_MUTU",
+}
+
+var skbRoomCodeAliases = map[string]string{
+	"MANAGER_OPERASIONAL": "MANAGER_OPERASIONAL_KNMP",
+	"KEPALA_KOPERASI":     "MANAJER_KOPERASI_KDMP",
+}
+
 var questionIndexLabels = map[models.QuestionIndex]string{
 	models.QuestionIndexVCI: "Verbal Comprehension Index",
 	models.QuestionIndexPRI: "Perceptual Reasoning Index",
 	models.QuestionIndexWMI: "Working Memory Index",
 	models.QuestionIndexPSI: "Processing Speed Index",
+	models.QuestionIndexSKB: "Tes SKB",
 }
 
 var subtestCatalog = []SubtestDefinition{
@@ -43,6 +57,11 @@ var subtestCatalog = []SubtestDefinition{
 	{Code: "SYMBOL_SEARCH", Label: "Symbol Search", QuestionIndex: models.QuestionIndexPSI},
 	{Code: "CODING", Label: "Coding", QuestionIndex: models.QuestionIndexPSI},
 	{Code: "CANCELLATION", Label: "Cancellation", QuestionIndex: models.QuestionIndexPSI},
+	{Code: "MANAJER_KOPERASI_KDMP", Label: "Manajer Kopreasi (KDMP)", QuestionIndex: models.QuestionIndexSKB},
+	{Code: "MANAGER_OPERASIONAL_KNMP", Label: "Manager Operesial (KNMP)", QuestionIndex: models.QuestionIndexSKB},
+	{Code: "KEPALA_PRODUKSI", Label: "Kepala Produksi (KNMP)", QuestionIndex: models.QuestionIndexSKB},
+	{Code: "PENGELOLA_KEUANGAN", Label: "Pengelola Keuangan (KNMP)", QuestionIndex: models.QuestionIndexSKB},
+	{Code: "PENJAMIN_MUTU", Label: "Penjamin Mutu (KNMP)", QuestionIndex: models.QuestionIndexSKB},
 }
 
 var subtestByCode = func() map[string]SubtestDefinition {
@@ -62,7 +81,7 @@ func OrderedQuestionIndices() []models.QuestionIndex {
 func NormalizeQuestionIndex(value models.QuestionIndex) (models.QuestionIndex, error) {
 	normalized := models.QuestionIndex(strings.ToUpper(strings.TrimSpace(string(value))))
 	switch normalized {
-	case models.QuestionIndexVCI, models.QuestionIndexPRI, models.QuestionIndexWMI, models.QuestionIndexPSI:
+	case models.QuestionIndexVCI, models.QuestionIndexPRI, models.QuestionIndexWMI, models.QuestionIndexPSI, models.QuestionIndexSKB:
 		return normalized, nil
 	default:
 		return "", errors.New("question index tidak valid")
@@ -102,6 +121,57 @@ func GetQuestionIndexLabel(index models.QuestionIndex) string {
 func GetSubtestDefinition(code string) (SubtestDefinition, bool) {
 	definition, ok := subtestByCode[NormalizeSubtestCode(code)]
 	return definition, ok
+}
+
+func OrderedSKBRoomCodes() []string {
+	items := make([]string, len(orderedSKBRoomCodes))
+	copy(items, orderedSKBRoomCodes)
+	return items
+}
+
+func NormalizeTestType(value models.TestType) (models.TestType, error) {
+	normalized := models.TestType(strings.ToUpper(strings.TrimSpace(string(value))))
+	switch normalized {
+	case models.TestTypeIQ, models.TestTypeSKB:
+		return normalized, nil
+	default:
+		return "", errors.New("jenis test tidak valid")
+	}
+}
+
+func NormalizeRoomCode(value string) (string, error) {
+	normalized := NormalizeSubtestCode(value)
+	if normalized == "" {
+		return "", nil
+	}
+	if alias, ok := skbRoomCodeAliases[normalized]; ok {
+		normalized = alias
+	}
+	definition, ok := subtestByCode[normalized]
+	if !ok || definition.QuestionIndex != models.QuestionIndexSKB {
+		return "", errors.New("room SKB tidak valid")
+	}
+	return normalized, nil
+}
+
+func MatchingRoomCodes(value string) []string {
+	normalized, err := NormalizeRoomCode(value)
+	if err != nil || normalized == "" {
+		return nil
+	}
+
+	items := []string{normalized}
+	for legacyCode, canonicalCode := range skbRoomCodeAliases {
+		if canonicalCode == normalized {
+			items = append(items, legacyCode)
+		}
+	}
+
+	return items
+}
+
+func GetRoomLabel(code string) string {
+	return GetSubtestLabel(code)
 }
 
 func GetSubtestLabel(code string) string {

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 	"time"
-
+	"fmt"
 	"gorm.io/gorm"
 
 	"test-iq-ku/apps/api/internal/auth"
@@ -23,6 +23,13 @@ func NewAuthService(db *gorm.DB, cfg *config.Config) *AuthService {
 
 func (s *AuthService) Login(email string, password string) (*models.User, string, string, error) {
 	var user models.User
+	fmt.Println("Email: ", email)
+	fmt.Println("Password: ", password)
+	normalizedEmail := normalizeEmail(email)
+	fmt.Println("Normalized Email: ", normalizedEmail)
+	
+	
+	
 	if err := s.db.Where("email = ? AND status = ?", normalizeEmail(email), models.UserStatusActive).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, "", "", errors.New("email atau password salah")
@@ -30,6 +37,7 @@ func (s *AuthService) Login(email string, password string) (*models.User, string
 		return nil, "", "", err
 	}
 
+	fmt.Println("User: ", user)
 	if !auth.VerifyPassword(user.PasswordHash, strings.TrimSpace(password)) {
 		return nil, "", "", errors.New("email atau password salah")
 	}
@@ -64,6 +72,7 @@ func (s *AuthService) Register(name string, email string, password string) (*mod
 		PasswordHash: passwordHash,
 		Role:         models.RoleUser,
 		Status:       models.UserStatusActive,
+		AccountType:  models.AccountTypeFree,
 	}
 
 	if err := tx.Create(&user).Error; err != nil {

@@ -68,6 +68,17 @@ func normalizeUserStatus(status models.UserStatus) (models.UserStatus, error) {
 	}
 }
 
+func normalizeAccountType(accountType models.AccountType) (models.AccountType, error) {
+	switch accountType {
+	case "", models.AccountTypeFree:
+		return models.AccountTypeFree, nil
+	case models.AccountTypePaid:
+		return models.AccountTypePaid, nil
+	default:
+		return "", errors.New("tipe akun tidak valid")
+	}
+}
+
 func mapCreateUserError(err error) error {
 	if err == nil {
 		return nil

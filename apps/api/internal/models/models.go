@@ -12,7 +12,10 @@ type AttemptStatus string
 type AttemptSectionStatus string
 type QuestionStatus string
 type UserStatus string
+type AccountType string
 type QuestionIndex string
+type TestType string
+type PaymentStatus string
 
 const (
 	RoleUser  Role = "USER"
@@ -22,9 +25,23 @@ const (
 	QuestionIndexPRI QuestionIndex = "PRI"
 	QuestionIndexWMI QuestionIndex = "WMI"
 	QuestionIndexPSI QuestionIndex = "PSI"
+	QuestionIndexSKB QuestionIndex = "SKB"
+
+	TestTypeIQ  TestType = "IQ"
+	TestTypeSKB TestType = "SKB"
 
 	UserStatusActive   UserStatus = "ACTIVE"
 	UserStatusInactive UserStatus = "INACTIVE"
+
+	AccountTypeFree AccountType = "FREE"
+	AccountTypePaid AccountType = "PAID"
+
+	PaymentStatusInitiated PaymentStatus = "INITIATED"
+	PaymentStatusPending   PaymentStatus = "PENDING"
+	PaymentStatusPaid      PaymentStatus = "PAID"
+	PaymentStatusFailed    PaymentStatus = "FAILED"
+	PaymentStatusExpired   PaymentStatus = "EXPIRED"
+	PaymentStatusCanceled  PaymentStatus = "CANCELED"
 
 	AttemptStatusInProgress AttemptStatus = "IN_PROGRESS"
 	AttemptStatusSubmitted  AttemptStatus = "SUBMITTED"
@@ -41,14 +58,15 @@ const (
 )
 
 type User struct {
-	ID           uint       `gorm:"primaryKey" json:"id"`
-	Name         string     `gorm:"size:120;not null" json:"name"`
-	Email        string     `gorm:"size:191;not null;uniqueIndex" json:"email"`
-	PasswordHash string     `gorm:"size:255;not null" json:"-"`
-	Role         Role       `gorm:"size:20;not null;index" json:"role"`
-	Status       UserStatus `gorm:"size:20;not null;index" json:"status"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
+	ID           uint        `gorm:"primaryKey" json:"id"`
+	Name         string      `gorm:"size:120;not null" json:"name"`
+	Email        string      `gorm:"size:191;not null;uniqueIndex" json:"email"`
+	PasswordHash string      `gorm:"size:255;not null" json:"-"`
+	Role         Role        `gorm:"size:20;not null;index" json:"role"`
+	Status       UserStatus  `gorm:"size:20;not null;index" json:"status"`
+	AccountType  AccountType `gorm:"size:20;not null;default:'FREE';index" json:"accountType"`
+	CreatedAt    time.Time   `json:"createdAt"`
+	UpdatedAt    time.Time   `json:"updatedAt"`
 }
 
 type Question struct {
@@ -80,6 +98,9 @@ type QuestionOption struct {
 type TestConfig struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
 	Title           string    `gorm:"size:191;not null" json:"title"`
+	TestType        TestType  `gorm:"size:20;not null;default:'IQ';index:idx_test_config_type_room,priority:1" json:"testType"`
+	RoomCode        string    `gorm:"size:64;not null;default:'';index:idx_test_config_type_room,priority:2" json:"roomCode"`
+	RoomLabel       string    `gorm:"size:191;not null;default:''" json:"roomLabel"`
 	DurationMinutes int       `gorm:"not null" json:"durationMinutes"`
 	QuestionCount   int       `gorm:"not null" json:"questionCount"`
 	IsActive        bool      `gorm:"not null;default:true;index" json:"isActive"`
@@ -91,6 +112,9 @@ type Attempt struct {
 	ID              uint          `gorm:"primaryKey" json:"id"`
 	UserID          uint          `gorm:"not null;index:idx_attempt_user_status,priority:1" json:"userId"`
 	TestConfigID    uint          `gorm:"not null;index:idx_attempt_config_status,priority:1" json:"testConfigId"`
+	TestType        TestType      `gorm:"size:20;not null;default:'IQ';index:idx_attempt_user_type_room_status,priority:2" json:"testType"`
+	RoomCode        string        `gorm:"size:64;not null;default:'';index:idx_attempt_user_type_room_status,priority:3" json:"roomCode"`
+	RoomLabel       string        `gorm:"size:191;not null;default:''" json:"roomLabel"`
 	Status          AttemptStatus `gorm:"size:20;not null;index:idx_attempt_user_status,priority:2;index:idx_attempt_config_status,priority:2" json:"status"`
 	StartedAt       time.Time     `gorm:"not null" json:"startedAt"`
 	ExpiresAt       time.Time     `gorm:"not null" json:"expiresAt"`
@@ -152,6 +176,25 @@ type RefreshToken struct {
 	RevokedAt *time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type PaymentTransaction struct {
+	ID                    uint           `gorm:"primaryKey" json:"id"`
+	UserID                uint           `gorm:"not null;index" json:"userId"`
+	OrderID               string         `gorm:"size:64;not null;uniqueIndex" json:"orderId"`
+	ProductCode           string         `gorm:"size:64;not null;index" json:"productCode"`
+	Amount                int            `gorm:"not null" json:"amount"`
+	Status                PaymentStatus  `gorm:"size:20;not null;index" json:"status"`
+	SnapToken             string         `gorm:"size:191;not null" json:"snapToken"`
+	RedirectURL           string         `gorm:"size:255;not null" json:"redirectUrl"`
+	MidtransTransactionID string         `gorm:"size:64;not null;default:''" json:"midtransTransactionId"`
+	PaymentType           string         `gorm:"size:64;not null;default:''" json:"paymentType"`
+	FraudStatus           string         `gorm:"size:32;not null;default:''" json:"fraudStatus"`
+	TransactionStatus     string         `gorm:"size:32;not null;default:''" json:"transactionStatus"`
+	PaidAt                *time.Time     `json:"paidAt"`
+	Metadata              datatypes.JSON `gorm:"type:json" json:"metadata"`
+	CreatedAt             time.Time      `json:"createdAt"`
+	UpdatedAt             time.Time      `json:"updatedAt"`
 }
 
 type OptionSnapshot struct {

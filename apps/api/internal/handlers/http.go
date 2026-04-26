@@ -20,14 +20,16 @@ type Handler struct {
 	auth  *services.AuthService
 	test  *services.TestService
 	admin *services.AdminService
+	pay   *services.PaymentService
 }
 
-func New(cfg *config.Config, authService *services.AuthService, testService *services.TestService, adminService *services.AdminService) *Handler {
+func New(cfg *config.Config, authService *services.AuthService, testService *services.TestService, adminService *services.AdminService, paymentService *services.PaymentService) *Handler {
 	return &Handler{
 		cfg:   cfg,
 		auth:  authService,
 		test:  testService,
 		admin: adminService,
+		pay:   paymentService,
 	}
 }
 
@@ -120,10 +122,67 @@ func (h *Handler) Session(c fiber.Ctx) error {
 	})
 }
 
+func (h *Handler) CreateProUpgradePayment(c fiber.Ctx) error {
+	user, _ := middleware.CurrentUser(c)
+	result, err := h.pay.CreateProUpgradePayment(user)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
+	}
+
+	return c.JSON(fiber.Map{
+		"message":     "snap token berhasil dibuat",
+		"orderId":     result.OrderID,
+		"snapToken":   result.SnapToken,
+		"redirectUrl": result.RedirectURL,
+		"amount":      result.Amount,
+		"status":      result.Status,
+	})
+}
+
+func (h *Handler) ConfirmProUpgradePayment(c fiber.Ctx) error {
+	user, _ := middleware.CurrentUser(c)
+	var payload services.ConfirmPaymentInput
+	if err := c.Bind().Body(&payload); err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, "payload konfirmasi pembayaran tidak valid", err.Error())
+	}
+
+	result, err := h.pay.ConfirmPayment(user, payload)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
+	}
+
+	return c.JSON(fiber.Map{
+		"message":           "status pembayaran berhasil diperbarui",
+		"orderId":           result.OrderID,
+		"accountType":       result.AccountType,
+		"paymentStatus":     result.PaymentStatus,
+		"transactionStatus": result.TransactionStatus,
+	})
+}
+
+func (h *Handler) MidtransNotification(c fiber.Ctx) error {
+	result, err := h.pay.HandleMidtransNotification(c.Body())
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
+	}
+
+	return c.JSON(fiber.Map{
+		"message":           "notifikasi pembayaran diproses",
+		"orderId":           result.OrderID,
+		"accountType":       result.AccountType,
+		"paymentStatus":     result.PaymentStatus,
+		"transactionStatus": result.TransactionStatus,
+	})
+}
+
 func (h *Handler) StartAttempt(c fiber.Ctx) error {
 	user, _ := middleware.CurrentUser(c)
+	var payload services.StartAttemptInput
+	if err := c.Bind().Body(&payload); err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, "payload start attempt tidak valid", err.Error())
+	}
 
-	attempt, err := h.test.StartAttempt(user)
+	attempt, err := h.test.StartAttempt(user, payload)
 	if err != nil {
 		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
 	}
@@ -137,8 +196,12 @@ func (h *Handler) StartAttempt(c fiber.Ctx) error {
 
 func (h *Handler) GetCurrentAttempt(c fiber.Ctx) error {
 	user, _ := middleware.CurrentUser(c)
+	testType, roomCode, err := parseTestSelection(c)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
+	}
 
-	attempt, err := h.test.GetCurrentAttempt(user.ID)
+	attempt, err := h.test.GetCurrentAttempt(user.ID, testType, roomCode)
 	if err != nil {
 		return utils.RespondError(c, fiber.StatusInternalServerError, "gagal mengambil current attempt", err.Error())
 	}
@@ -166,6 +229,9 @@ func (h *Handler) GetAttemptDetail(c fiber.Ctx) error {
 		"startedAt":       detail.Attempt.StartedAt.UTC().Format(time.RFC3339),
 		"expiresAt":       detail.Attempt.ExpiresAt.UTC().Format(time.RFC3339),
 		"submittedAt":     nullableTime(detail.Attempt.SubmittedAt),
+		"testType":        detail.Attempt.TestType,
+		"roomCode":        nullableString(detail.Attempt.RoomCode),
+		"roomLabel":       nullableString(detail.Attempt.RoomLabel),
 		"durationMinutes": detail.Attempt.DurationMinutes,
 		"rawScore":        detail.Attempt.RawScore,
 		"totalQuestions":  detail.Attempt.TotalQuestions,
@@ -262,7 +328,14 @@ func (h *Handler) SubmitAttempt(c fiber.Ctx) error {
 
 func (h *Handler) LatestResult(c fiber.Ctx) error {
 	user, _ := middleware.CurrentUser(c)
-	result, err := h.test.GetLatestResultDetail(user.ID)
+	testType, roomCode, err := parseOptionalTestSelection(c)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
+	}
+	if testType == "" {
+		testType = models.TestTypeIQ
+	}
+	result, err := h.test.GetLatestResultDetail(user.ID, testType, roomCode)
 	if err != nil {
 		return utils.RespondError(c, fiber.StatusInternalServerError, "gagal mengambil hasil", err.Error())
 	}
@@ -272,11 +345,75 @@ func (h *Handler) LatestResult(c fiber.Ctx) error {
 	})
 }
 
+func (h *Handler) ListMyResults(c fiber.Ctx) error {
+	user, _ := middleware.CurrentUser(c)
+	testType, roomCode, err := parseOptionalTestSelection(c)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
+	}
+	if testType == "" {
+		testType = models.TestTypeIQ
+	}
+
+	results, err := h.test.ListResultDetails(user.ID, testType, roomCode)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusInternalServerError, "gagal mengambil riwayat hasil", err.Error())
+	}
+
+	rows := make([]fiber.Map, 0, len(results))
+	for _, result := range results {
+		rows = append(rows, serializeAttemptResult(result))
+	}
+
+	return c.JSON(fiber.Map{
+		"results": rows,
+	})
+}
+
+func (h *Handler) AdminOverview(c fiber.Ctx) error {
+	overview, err := h.admin.GetOverview()
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusInternalServerError, "gagal mengambil overview admin", err.Error())
+	}
+
+	return c.JSON(fiber.Map{
+		"overview": fiber.Map{
+			"questionStats": fiber.Map{
+				"total":     overview.QuestionStats.Total,
+				"published": overview.QuestionStats.Published,
+				"draft":     overview.QuestionStats.Draft,
+				"archived":  overview.QuestionStats.Archived,
+				"visual":    overview.QuestionStats.Visual,
+			},
+			"userStats": fiber.Map{
+				"total":            overview.UserStats.Total,
+				"active":           overview.UserStats.Active,
+				"inactive":         overview.UserStats.Inactive,
+				"adminCount":       overview.UserStats.AdminCount,
+				"participantCount": overview.UserStats.ParticipantCount,
+			},
+			"attemptStats": fiber.Map{
+				"inProgress": overview.AttemptStats.InProgress,
+				"submitted":  overview.AttemptStats.Submitted,
+				"expired":    overview.AttemptStats.Expired,
+			},
+			"resultStats": fiber.Map{
+				"submissionCount":    overview.ResultStats.SubmissionCount,
+				"averagePercentage":  overview.ResultStats.AveragePercentage,
+				"highestEstimatedIq": overview.ResultStats.HighestEstimatedIQ,
+			},
+			"questionHealth": serializeAdminQuestionHealth(overview.QuestionHealth),
+			"activeConfig":   serializeAdminConfigHealth(overview.ActiveConfig),
+		},
+	})
+}
+
 func (h *Handler) ListQuestions(c fiber.Ctx) error {
 	limit, offset := pagination(c)
 	search := c.Query("q")
 	status := c.Query("status")
-	questions, err := h.admin.ListQuestions(search, status, limit, offset)
+	questionIndex := c.Query("index")
+	questions, err := h.admin.ListQuestions(search, status, questionIndex, limit, offset)
 	if err != nil {
 		return utils.RespondError(c, fiber.StatusInternalServerError, "gagal mengambil soal", err.Error())
 	}
@@ -377,7 +514,10 @@ func (h *Handler) DeleteQuestion(c fiber.Ctx) error {
 
 func (h *Handler) ListUsers(c fiber.Ctx) error {
 	limit, offset := pagination(c)
-	users, err := h.admin.ListUsers(limit, offset)
+	search := c.Query("q")
+	role := c.Query("role")
+	status := c.Query("status")
+	users, err := h.admin.ListUsers(search, role, status, limit, offset)
 	if err != nil {
 		return utils.RespondError(c, fiber.StatusInternalServerError, "gagal mengambil users", err.Error())
 	}
@@ -385,12 +525,13 @@ func (h *Handler) ListUsers(c fiber.Ctx) error {
 	rows := make([]fiber.Map, 0, len(users))
 	for _, user := range users {
 		rows = append(rows, fiber.Map{
-			"id":        user.ID,
-			"name":      user.Name,
-			"email":     user.Email,
-			"role":      user.Role,
-			"status":    user.Status,
-			"createdAt": user.CreatedAt.UTC().Format(time.RFC3339),
+			"id":          user.ID,
+			"name":        user.Name,
+			"email":       user.Email,
+			"role":        user.Role,
+			"status":      user.Status,
+			"accountType": user.AccountType,
+			"createdAt":   user.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -432,7 +573,8 @@ func (h *Handler) UpdateUser(c fiber.Ctx) error {
 
 func (h *Handler) ListResults(c fiber.Ctx) error {
 	limit, offset := pagination(c)
-	rows, err := h.admin.ListResults(limit, offset)
+	search := c.Query("q")
+	rows, err := h.admin.ListResults(search, limit, offset)
 	if err != nil {
 		return utils.RespondError(c, fiber.StatusInternalServerError, "gagal mengambil hasil", err.Error())
 	}
@@ -459,7 +601,24 @@ func (h *Handler) ListResults(c fiber.Ctx) error {
 }
 
 func (h *Handler) GetTestConfig(c fiber.Ctx) error {
-	config, err := h.admin.GetActiveTestConfig()
+	testType, roomCode, err := parseOptionalTestSelection(c)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
+	}
+
+	if testType == "" {
+		configs, err := h.admin.ListActiveTestConfigs("", "")
+		if err != nil {
+			return utils.RespondError(c, fiber.StatusInternalServerError, "gagal mengambil konfigurasi test", err.Error())
+		}
+		rows := make([]fiber.Map, 0, len(configs))
+		for _, config := range configs {
+			rows = append(rows, serializeTestConfig(config))
+		}
+		return c.JSON(fiber.Map{"configs": rows})
+	}
+
+	config, err := h.admin.GetActiveTestConfig(testType, roomCode)
 	if err != nil {
 		return utils.RespondError(c, fiber.StatusInternalServerError, "gagal mengambil konfigurasi test", err.Error())
 	}
@@ -468,14 +627,7 @@ func (h *Handler) GetTestConfig(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"config": nil})
 	}
 
-	return c.JSON(fiber.Map{"config": fiber.Map{
-		"id":              config.ID,
-		"title":           config.Title,
-		"durationMinutes": config.DurationMinutes,
-		"questionCount":   config.QuestionCount,
-		"isActive":        config.IsActive,
-		"updatedAt":       config.UpdatedAt.UTC().Format(time.RFC3339),
-	}})
+	return c.JSON(fiber.Map{"config": serializeTestConfig(*config)})
 }
 
 func (h *Handler) UpdateTestConfig(c fiber.Ctx) error {
@@ -540,16 +692,21 @@ func (h *Handler) clearAuthCookies(c fiber.Ctx) {
 
 func serializeUser(user models.User) fiber.Map {
 	return fiber.Map{
-		"id":    user.ID,
-		"name":  user.Name,
-		"email": user.Email,
-		"role":  user.Role,
+		"id":          user.ID,
+		"name":        user.Name,
+		"email":       user.Email,
+		"role":        user.Role,
+		"status":      user.Status,
+		"accountType": user.AccountType,
 	}
 }
 
 func serializeAttemptSummary(attempt models.Attempt) fiber.Map {
 	return fiber.Map{
 		"id":             attempt.ID,
+		"testType":       attempt.TestType,
+		"roomCode":       nullableString(attempt.RoomCode),
+		"roomLabel":      nullableString(attempt.RoomLabel),
 		"status":         attempt.Status,
 		"startedAt":      attempt.StartedAt.UTC().Format(time.RFC3339),
 		"expiresAt":      attempt.ExpiresAt.UTC().Format(time.RFC3339),
@@ -575,6 +732,39 @@ func serializeAttemptSections(sections []services.AttemptSectionView) []fiber.Ma
 	return rows
 }
 
+func serializeAdminQuestionHealth(rows []services.AdminQuestionHealthRow) []fiber.Map {
+	response := make([]fiber.Map, 0, len(rows))
+	for _, row := range rows {
+		response = append(response, fiber.Map{
+			"code":      row.Code,
+			"label":     row.Label,
+			"published": row.Published,
+			"total":     row.Total,
+		})
+	}
+	return response
+}
+
+func serializeAdminConfigHealth(config *services.AdminConfigHealth) any {
+	if config == nil {
+		return nil
+	}
+
+	return fiber.Map{
+		"id":                     config.ID,
+		"title":                  config.Title,
+		"testType":               config.TestType,
+		"roomCode":               nullableString(config.RoomCode),
+		"roomLabel":              nullableString(config.RoomLabel),
+		"durationMinutes":        config.DurationMinutes,
+		"questionCount":          config.QuestionCount,
+		"publishedQuestionCount": config.PublishedQuestionCount,
+		"canStartAttempt":        config.CanStartAttempt,
+		"readinessMessage":       config.ReadinessMessage,
+		"questionHealth":         serializeAdminQuestionHealth(config.QuestionHealth),
+	}
+}
+
 func serializeAttemptSection(section models.AttemptSection, answeredCount int) fiber.Map {
 	return fiber.Map{
 		"id":              section.ID,
@@ -588,6 +778,20 @@ func serializeAttemptSection(section models.AttemptSection, answeredCount int) f
 		"startedAt":       nullableTime(section.StartedAt),
 		"expiresAt":       nullableTime(section.ExpiresAt),
 		"submittedAt":     nullableTime(section.SubmittedAt),
+	}
+}
+
+func serializeTestConfig(config models.TestConfig) fiber.Map {
+	return fiber.Map{
+		"id":              config.ID,
+		"title":           config.Title,
+		"testType":        config.TestType,
+		"roomCode":        nullableString(config.RoomCode),
+		"roomLabel":       nullableString(config.RoomLabel),
+		"durationMinutes": config.DurationMinutes,
+		"questionCount":   config.QuestionCount,
+		"isActive":        config.IsActive,
+		"updatedAt":       config.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -621,6 +825,7 @@ func serializeAttemptResult(result services.AttemptResultView) fiber.Map {
 
 	payload := serializeAttemptSummary(result.Attempt)
 	payload["estimatedIq"] = result.EstimatedIQ
+	payload["skbScore"] = result.SKBScore
 	payload["classificationLabel"] = result.ClassificationLabel
 	payload["indexScores"] = indexScores
 	return payload
@@ -659,4 +864,39 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
+}
+
+func parseOptionalTestSelection(c fiber.Ctx) (models.TestType, string, error) {
+	testType := strings.TrimSpace(strings.ToUpper(c.Query("testType")))
+	roomCode := strings.TrimSpace(strings.ToUpper(c.Query("roomCode")))
+	if testType == "" {
+		return "", "", nil
+	}
+
+	normalizedType, err := services.NormalizeTestType(models.TestType(testType))
+	if err != nil {
+		return "", "", err
+	}
+	normalizedRoomCode, err := services.NormalizeRoomCode(roomCode)
+	if err != nil {
+		return "", "", err
+	}
+	if normalizedType == models.TestTypeIQ {
+		normalizedRoomCode = ""
+	}
+	return normalizedType, normalizedRoomCode, nil
+}
+
+func parseTestSelection(c fiber.Ctx) (models.TestType, string, error) {
+	testType, roomCode, err := parseOptionalTestSelection(c)
+	if err != nil {
+		return "", "", err
+	}
+	if testType == "" {
+		return models.TestTypeIQ, "", nil
+	}
+	if testType == models.TestTypeSKB && roomCode == "" {
+		return "", "", fiber.NewError(fiber.StatusBadRequest, "room SKB wajib dipilih")
+	}
+	return testType, roomCode, nil
 }

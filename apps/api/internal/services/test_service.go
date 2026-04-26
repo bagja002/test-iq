@@ -59,8 +59,14 @@ type IndexScoreView struct {
 type AttemptResultView struct {
 	Attempt             models.Attempt
 	EstimatedIQ         *int
+	SKBScore            *float64
 	ClassificationLabel string
 	IndexScores         []IndexScoreView
+}
+
+type StartAttemptInput struct {
+	TestType models.TestType `json:"testType"`
+	RoomCode string          `json:"roomCode"`
 }
 
 type SaveAnswerInput struct {
@@ -72,26 +78,55 @@ type TestService struct {
 	db *gorm.DB
 }
 
+const freeIQQuestionLimit = 2
+const iqQuestionsPerSection = 30
+const iqTotalQuestionCount = iqQuestionsPerSection * 4
+const skbQuestionCountPerAttempt = 30
+
 func NewTestService(db *gorm.DB) *TestService {
 	return &TestService{db: db}
 }
 
-func (s *TestService) StartAttempt(user models.User) (*models.Attempt, error) {
+func (s *TestService) StartAttempt(user models.User, input StartAttemptInput) (*models.Attempt, error) {
 	now := time.Now()
+	if input.TestType == "" {
+		input.TestType = models.TestTypeIQ
+	}
+	testType, err := NormalizeTestType(input.TestType)
+	if err != nil {
+		return nil, err
+	}
+	roomCode, err := NormalizeRoomCode(input.RoomCode)
+	if err != nil {
+		return nil, err
+	}
+	if testType == models.TestTypeIQ {
+		roomCode = ""
+	}
+	if testType == models.TestTypeSKB && roomCode == "" {
+		return nil, errors.New("room SKB wajib dipilih")
+	}
+	if err := validateAccountTestAccess(user.AccountType, testType); err != nil {
+		return nil, err
+	}
+	roomCodes := []string{roomCode}
+	if testType == models.TestTypeSKB {
+		roomCodes = MatchingRoomCodes(roomCode)
+	}
 
 	tx := s.db.Begin()
 	if tx.Error != nil {
 		return nil, tx.Error
 	}
 
-	if err := expireAttempts(tx, user.ID, now); err != nil {
+	if err := expireAttempts(tx, user.ID, testType, roomCode, now); err != nil {
 		tx.Rollback()
 		return nil, err
 	}
 
 	var activeAttempt models.Attempt
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("user_id = ? AND status = ?", user.ID, models.AttemptStatusInProgress).
+		Where("user_id = ? AND test_type = ? AND room_code IN ? AND status = ?", user.ID, testType, roomCodes, models.AttemptStatusInProgress).
 		Order("id DESC").
 		First(&activeAttempt).Error; err == nil {
 		tx.Commit()
@@ -102,34 +137,74 @@ func (s *TestService) StartAttempt(user models.User) (*models.Attempt, error) {
 	}
 
 	var config models.TestConfig
-	if err := tx.Where("is_active = ?", true).Order("id DESC").First(&config).Error; err != nil {
+	if err := tx.Where("is_active = ? AND test_type = ? AND room_code IN ?", true, testType, roomCodes).Order("id DESC").First(&config).Error; err != nil {
 		tx.Rollback()
 		return nil, errors.New("belum ada test aktif")
 	}
 
-	var questions []models.Question
-	if err := tx.Preload("Options").
-		Where("status = ? AND question_index <> '' AND subtest_code <> ''", models.QuestionStatusPublished).
-		Order("RAND()").
-		Limit(config.QuestionCount).
-		Find(&questions).Error; err != nil {
-		tx.Rollback()
-		return nil, err
+	effectiveQuestionCount := resolveQuestionCountForAccount(user.AccountType, config.TestType, config.QuestionCount)
+
+	type availabilityRow struct {
+		QuestionIndex models.QuestionIndex
+		Total         int
 	}
 
-	if len(questions) < config.QuestionCount {
+	var availabilityRows []availabilityRow
+	questions := make([]models.Question, 0, config.QuestionCount)
+	if config.TestType == models.TestTypeSKB {
+		var chunk []models.Question
 		if err := tx.Preload("Options").
-			Where("status = ?", models.QuestionStatusPublished).
+			Where("status = ? AND question_index = ? AND subtest_code = ?", models.QuestionStatusPublished, models.QuestionIndexSKB, config.RoomCode).
 			Order("RAND()").
-			Limit(config.QuestionCount).
-			Find(&questions).Error; err != nil {
+			Limit(effectiveQuestionCount).
+			Find(&chunk).Error; err != nil {
 			tx.Rollback()
 			return nil, err
 		}
 
-		if len(questions) < config.QuestionCount {
+		if len(chunk) < effectiveQuestionCount {
 			tx.Rollback()
-			return nil, errors.New("jumlah soal yang dipublikasikan belum mencukupi")
+			return nil, errors.New("jumlah soal SKB published belum mencukupi untuk kamar ini")
+		}
+		questions = append(questions, chunk...)
+	} else {
+		if err := tx.Model(&models.Question{}).
+			Select("question_index, COUNT(*) as total").
+			Where("status = ? AND question_index <> '' AND subtest_code <> '' AND question_index <> ?", models.QuestionStatusPublished, models.QuestionIndexSKB).
+			Group("question_index").
+			Scan(&availabilityRows).Error; err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+
+		available := make(map[models.QuestionIndex]int, len(availabilityRows))
+		for _, row := range availabilityRows {
+			available[row.QuestionIndex] = row.Total
+		}
+
+		selectionPlan, err := buildQuestionSelectionPlan(effectiveQuestionCount, available)
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+
+		for _, item := range selectionPlan {
+			var chunk []models.Question
+			if err := tx.Preload("Options").
+				Where("status = ? AND question_index = ? AND subtest_code <> ''", models.QuestionStatusPublished, item.Code).
+				Order("RAND()").
+				Limit(item.Requested).
+				Find(&chunk).Error; err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+
+			if len(chunk) < item.Requested {
+				tx.Rollback()
+				return nil, errors.New("jumlah soal published belum mencukupi untuk distribusi per index")
+			}
+
+			questions = append(questions, chunk...)
 		}
 	}
 
@@ -138,10 +213,13 @@ func (s *TestService) StartAttempt(user models.User) (*models.Attempt, error) {
 	attempt := models.Attempt{
 		UserID:          user.ID,
 		TestConfigID:    config.ID,
+		TestType:        config.TestType,
+		RoomCode:        config.RoomCode,
+		RoomLabel:       config.RoomLabel,
 		Status:          models.AttemptStatusInProgress,
 		StartedAt:       now,
 		ExpiresAt:       now.Add(time.Duration(config.DurationMinutes) * time.Minute),
-		TotalQuestions:  config.QuestionCount,
+		TotalQuestions:  len(questions),
 		DurationMinutes: config.DurationMinutes,
 	}
 
@@ -191,7 +269,7 @@ func (s *TestService) StartAttempt(user models.User) (*models.Attempt, error) {
 		return nil, err
 	}
 
-	attemptSections := buildAttemptSectionRecordsFromQuestions(attempt.ID, questions, config.DurationMinutes)
+	attemptSections := buildAttemptSectionRecordsFromQuestions(attempt.ID, questions, config.DurationMinutes, config.TestType)
 	if len(attemptSections) == 0 {
 		tx.Rollback()
 		return nil, errors.New("gagal membentuk bagian test")
@@ -209,14 +287,19 @@ func (s *TestService) StartAttempt(user models.User) (*models.Attempt, error) {
 	return &attempt, nil
 }
 
-func (s *TestService) GetCurrentAttempt(userID uint) (*models.Attempt, error) {
+func (s *TestService) GetCurrentAttempt(userID uint, testType models.TestType, roomCode string) (*models.Attempt, error) {
 	now := time.Now()
-	if err := expireAttempts(s.db, userID, now); err != nil {
+	if err := expireAttempts(s.db, userID, testType, roomCode, now); err != nil {
 		return nil, err
 	}
 
+	roomCodes := []string{roomCode}
+	if testType == models.TestTypeSKB {
+		roomCodes = MatchingRoomCodes(roomCode)
+	}
+
 	var attempt models.Attempt
-	if err := s.db.Where("user_id = ? AND status = ?", userID, models.AttemptStatusInProgress).Order("id DESC").First(&attempt).Error; err != nil {
+	if err := s.db.Where("user_id = ? AND test_type = ? AND room_code IN ? AND status = ?", userID, testType, roomCodes, models.AttemptStatusInProgress).Order("id DESC").First(&attempt).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -245,6 +328,12 @@ func (s *TestService) GetAttemptDetail(requester models.User, attemptID uint) (*
 			return nil, errors.New("attempt tidak ditemukan")
 		}
 		return nil, err
+	}
+	if requester.Role != models.RoleAdmin {
+		if err := validateAccountTestAccess(requester.AccountType, attempt.TestType); err != nil {
+			tx.Rollback()
+			return nil, err
+		}
 	}
 
 	var questions []models.AttemptQuestion
@@ -310,6 +399,10 @@ func (s *TestService) SaveAnswers(userID uint, attemptID uint, answers []SaveAns
 		First(&attempt).Error; err != nil {
 		tx.Rollback()
 		return errors.New("attempt tidak ditemukan")
+	}
+	if err := ensureAttemptAllowedForUser(tx, userID, attempt.TestType); err != nil {
+		tx.Rollback()
+		return err
 	}
 
 	if attempt.Status != models.AttemptStatusInProgress {
@@ -432,6 +525,10 @@ func (s *TestService) StartSection(userID uint, attemptID uint, sectionCode mode
 		tx.Rollback()
 		return nil, errors.New("attempt tidak ditemukan")
 	}
+	if err := ensureAttemptAllowedForUser(tx, userID, attempt.TestType); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 
 	if attempt.Status != models.AttemptStatusInProgress {
 		tx.Rollback()
@@ -533,6 +630,10 @@ func (s *TestService) SubmitSection(userID uint, attemptID uint, sectionCode mod
 		tx.Rollback()
 		return nil, errors.New("attempt tidak ditemukan")
 	}
+	if err := ensureAttemptAllowedForUser(tx, userID, attempt.TestType); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 
 	if attempt.Status != models.AttemptStatusInProgress {
 		tx.Rollback()
@@ -625,6 +726,10 @@ func (s *TestService) SubmitAttempt(userID uint, attemptID uint) (*models.Attemp
 		tx.Rollback()
 		return nil, errors.New("attempt tidak ditemukan")
 	}
+	if err := ensureAttemptAllowedForUser(tx, userID, attempt.TestType); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 
 	if attempt.Status != models.AttemptStatusInProgress {
 		tx.Rollback()
@@ -694,9 +799,18 @@ func (s *TestService) SubmitAttempt(userID uint, attemptID uint) (*models.Attemp
 	return &attempt, nil
 }
 
-func (s *TestService) GetLatestResult(userID uint) (*models.Attempt, error) {
+func (s *TestService) GetLatestResult(userID uint, testType models.TestType, roomCode string) (*models.Attempt, error) {
 	var attempt models.Attempt
-	if err := s.db.Where("user_id = ? AND status = ?", userID, models.AttemptStatusSubmitted).Order("submitted_at DESC, id DESC").First(&attempt).Error; err != nil {
+	query := s.db.Where("user_id = ? AND test_type = ? AND status = ?", userID, testType, models.AttemptStatusSubmitted)
+	if testType != models.TestTypeSKB || roomCode != "" {
+		roomCodes := []string{roomCode}
+		if testType == models.TestTypeSKB {
+			roomCodes = MatchingRoomCodes(roomCode)
+		}
+		query = query.Where("room_code IN ?", roomCodes)
+	}
+
+	if err := query.Order("submitted_at DESC, id DESC").First(&attempt).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -706,13 +820,40 @@ func (s *TestService) GetLatestResult(userID uint) (*models.Attempt, error) {
 	return &attempt, nil
 }
 
-func (s *TestService) GetLatestResultDetail(userID uint) (*AttemptResultView, error) {
-	attempt, err := s.GetLatestResult(userID)
+func (s *TestService) GetLatestResultDetail(userID uint, testType models.TestType, roomCode string) (*AttemptResultView, error) {
+	attempt, err := s.GetLatestResult(userID, testType, roomCode)
 	if err != nil || attempt == nil {
 		return nil, err
 	}
 
 	return s.BuildAttemptResultView(*attempt)
+}
+
+func (s *TestService) ListResultDetails(userID uint, testType models.TestType, roomCode string) ([]AttemptResultView, error) {
+	var attempts []models.Attempt
+	query := s.db.Where("user_id = ? AND test_type = ? AND status = ?", userID, testType, models.AttemptStatusSubmitted)
+	if testType != models.TestTypeSKB || roomCode != "" {
+		roomCodes := []string{roomCode}
+		if testType == models.TestTypeSKB {
+			roomCodes = MatchingRoomCodes(roomCode)
+		}
+		query = query.Where("room_code IN ?", roomCodes)
+	}
+
+	if err := query.Order("submitted_at DESC, id DESC").Find(&attempts).Error; err != nil {
+		return nil, err
+	}
+
+	results := make([]AttemptResultView, 0, len(attempts))
+	for _, attempt := range attempts {
+		item, err := s.BuildAttemptResultView(attempt)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, *item)
+	}
+
+	return results, nil
 }
 
 func (s *TestService) BuildAttemptResultView(attempt models.Attempt) (*AttemptResultView, error) {
@@ -727,16 +868,24 @@ func (s *TestService) BuildAttemptResultView(attempt models.Attempt) (*AttemptRe
 	}
 
 	var estimatedIQ *int
+	var skbScore *float64
 	classificationLabel := ""
-	if attempt.Percentage != nil {
+	if attempt.TestType == models.TestTypeIQ && attempt.Percentage != nil {
 		profile := BuildScreeningIQProfile(*attempt.Percentage)
 		estimatedIQ = &profile.EstimatedIQ
 		classificationLabel = profile.ClassificationLabel
+	} else if attempt.TestType == models.TestTypeSKB {
+		if attempt.Percentage != nil {
+			score := math.Round(*attempt.Percentage*100) / 100
+			skbScore = &score
+		}
+		classificationLabel = fmt.Sprintf("SKB %s", attempt.RoomLabel)
 	}
 
 	return &AttemptResultView{
 		Attempt:             attempt,
 		EstimatedIQ:         estimatedIQ,
+		SKBScore:            skbScore,
 		ClassificationLabel: classificationLabel,
 		IndexScores:         ScoreAttemptByIndex(questions, answerMap),
 	}, nil
@@ -782,16 +931,21 @@ func ScoreAttemptByIndex(questions []models.AttemptQuestion, answers map[uint]st
 	}
 
 	rows := make([]IndexScoreView, 0, len(aggregate))
-	for _, questionIndex := range OrderedQuestionIndices() {
+	displayOrder := append(OrderedQuestionIndices(), models.QuestionIndexSKB)
+	for _, questionIndex := range displayOrder {
 		score, ok := aggregate[questionIndex]
 		if !ok || score.total == 0 {
 			continue
 		}
 
+		label := GetQuestionIndexLabel(questionIndex)
+		if questionIndex == models.QuestionIndexSKB {
+			label = "SKB"
+		}
 		percentage := math.Round((float64(score.correct)/float64(score.total))*10000) / 100
 		rows = append(rows, IndexScoreView{
 			Code:       questionIndex,
-			Label:      GetQuestionIndexLabel(questionIndex),
+			Label:      label,
 			Correct:    score.correct,
 			Total:      score.total,
 			Percentage: percentage,
@@ -801,9 +955,14 @@ func ScoreAttemptByIndex(questions []models.AttemptQuestion, answers map[uint]st
 	return rows
 }
 
-func expireAttempts(db *gorm.DB, userID uint, now time.Time) error {
+func expireAttempts(db *gorm.DB, userID uint, testType models.TestType, roomCode string, now time.Time) error {
+	roomCodes := []string{roomCode}
+	if testType == models.TestTypeSKB {
+		roomCodes = MatchingRoomCodes(roomCode)
+	}
+
 	return db.Model(&models.Attempt{}).
-		Where("user_id = ? AND status = ? AND expires_at < ?", userID, models.AttemptStatusInProgress, now).
+		Where("user_id = ? AND test_type = ? AND room_code IN ? AND status = ? AND expires_at < ?", userID, testType, roomCodes, models.AttemptStatusInProgress, now).
 		Update("status", models.AttemptStatusExpired).Error
 }
 
@@ -826,6 +985,42 @@ func valueOrZero(value *float64) float64 {
 		return 0
 	}
 	return *value
+}
+
+func validateAccountTestAccess(accountType models.AccountType, testType models.TestType) error {
+	if accountType == models.AccountTypePaid {
+		return nil
+	}
+	if testType == models.TestTypeSKB {
+		return errors.New("akun gratis belum bisa mengakses SKB, silakan upgrade ke akun bayar")
+	}
+	return nil
+}
+
+func resolveQuestionCountForAccount(accountType models.AccountType, testType models.TestType, configuredQuestionCount int) int {
+	if accountType == models.AccountTypeFree && testType == models.TestTypeIQ {
+		if configuredQuestionCount > 0 && configuredQuestionCount < freeIQQuestionLimit {
+			return configuredQuestionCount
+		}
+		return freeIQQuestionLimit
+	}
+
+	switch testType {
+	case models.TestTypeIQ:
+		return iqTotalQuestionCount
+	case models.TestTypeSKB:
+		return skbQuestionCountPerAttempt
+	default:
+		return configuredQuestionCount
+	}
+}
+
+func ensureAttemptAllowedForUser(tx *gorm.DB, userID uint, testType models.TestType) error {
+	var user models.User
+	if err := tx.Select("id, account_type").First(&user, userID).Error; err != nil {
+		return errors.New("user tidak ditemukan")
+	}
+	return validateAccountTestAccess(user.AccountType, testType)
 }
 
 type attemptSectionSeed struct {
@@ -874,10 +1069,14 @@ func buildAttemptSectionViews(
 ) []AttemptSectionView {
 	answeredCountByIndex := make(map[models.QuestionIndex]int, len(sections))
 	questionCountByIndex := make(map[models.QuestionIndex]int, len(sections))
+	skbLabel := "Tes SKB"
 	for _, question := range questions {
 		questionCountByIndex[question.QuestionIndex]++
 		if answerMap[question.ID] != "" {
 			answeredCountByIndex[question.QuestionIndex]++
+		}
+		if question.QuestionIndex == models.QuestionIndexSKB && question.SubtestCode != "" {
+			skbLabel = GetSubtestLabel(question.SubtestCode)
 		}
 	}
 
@@ -888,10 +1087,15 @@ func buildAttemptSectionViews(
 			questionCount = questionCountByIndex[section.QuestionIndex]
 		}
 
+		label := GetQuestionIndexLabel(section.QuestionIndex)
+		if section.QuestionIndex == models.QuestionIndexSKB {
+			label = skbLabel
+		}
+
 		rows = append(rows, AttemptSectionView{
 			ID:              section.ID,
 			Code:            section.QuestionIndex,
-			Label:           GetQuestionIndexLabel(section.QuestionIndex),
+			Label:           label,
 			OrderNo:         section.OrderNo,
 			Status:          section.Status,
 			DurationMinutes: section.DurationMinutes,
@@ -935,7 +1139,16 @@ func buildAttemptSectionRecordsFromQuestions(
 	attemptID uint,
 	questions []models.Question,
 	durationMinutes int,
+	testType models.TestType,
 ) []models.AttemptSection {
+	if testType == models.TestTypeSKB {
+		return buildAttemptSectionRecords(attemptID, []attemptSectionSeed{{
+			Code:          models.QuestionIndexSKB,
+			OrderNo:       1,
+			QuestionCount: len(questions),
+		}}, durationMinutes)
+	}
+
 	seeds := make([]attemptSectionSeed, 0, len(orderedQuestionIndices))
 	for _, question := range questions {
 		if len(seeds) == 0 || seeds[len(seeds)-1].Code != question.QuestionIndex {
@@ -958,6 +1171,14 @@ func buildAttemptSectionRecordsFromAttemptQuestions(
 	questions []models.AttemptQuestion,
 	durationMinutes int,
 ) []models.AttemptSection {
+	if len(questions) > 0 && questions[0].QuestionIndex == models.QuestionIndexSKB {
+		return buildAttemptSectionRecords(attemptID, []attemptSectionSeed{{
+			Code:          models.QuestionIndexSKB,
+			OrderNo:       1,
+			QuestionCount: len(questions),
+		}}, durationMinutes)
+	}
+
 	seeds := make([]attemptSectionSeed, 0, len(orderedQuestionIndices))
 	for _, question := range questions {
 		if len(seeds) == 0 || seeds[len(seeds)-1].Code != question.QuestionIndex {
@@ -1133,6 +1354,9 @@ func questionIndexRank(index models.QuestionIndex) int {
 		if item == index {
 			return position
 		}
+	}
+	if index == models.QuestionIndexSKB {
+		return len(orderedQuestionIndices)
 	}
 	return len(orderedQuestionIndices) + 1
 }

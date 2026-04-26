@@ -14,6 +14,9 @@ type Config struct {
 	MySQLDSN           string
 	RedisURL           string
 	JWTSecret          string
+	MidtransServerKey  string
+	MidtransClientKey  string
+	MidtransProduction bool
 	AccessTokenTTL     time.Duration
 	RefreshTokenTTL    time.Duration
 	CookieSecure       bool
@@ -38,6 +41,9 @@ func Load() *Config {
 		MySQLDSN:           getString("MYSQL_DSN", ""),
 		RedisURL:           getString("REDIS_URL", ""),
 		JWTSecret:          getString("JWT_SECRET", "change-this-secret"),
+		MidtransServerKey:  getString("MIDTRANS_SERVER_KEY", ""),
+		MidtransClientKey:  getString("MIDTRANS_CLIENT_KEY", ""),
+		MidtransProduction: getBool("MIDTRANS_PRODUCTION", false),
 		AccessTokenTTL:     getDuration("ACCESS_TOKEN_TTL", 30*time.Minute),
 		RefreshTokenTTL:    getDuration("REFRESH_TOKEN_TTL", 7*24*time.Hour),
 		CookieSecure:       getBool("COOKIE_SECURE", false),

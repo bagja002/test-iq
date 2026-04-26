@@ -207,3 +207,30 @@ func TestBuildAttemptSectionRecordsFromAttemptQuestions(t *testing.T) {
 		t.Fatalf("unexpected last section record: %+v", records[3])
 	}
 }
+
+func TestResolveQuestionCountForAccount(t *testing.T) {
+	if total := resolveQuestionCountForAccount(models.AccountTypeFree, models.TestTypeIQ, 20); total != 2 {
+		t.Fatalf("expected free IQ to be capped at 2, got %d", total)
+	}
+	if total := resolveQuestionCountForAccount(models.AccountTypePaid, models.TestTypeIQ, 20); total != 120 {
+		t.Fatalf("expected paid IQ to use 120 questions, got %d", total)
+	}
+	if total := resolveQuestionCountForAccount(models.AccountTypeFree, models.TestTypeSKB, 3); total != 30 {
+		t.Fatalf("expected SKB to use 30 questions per jabatan, got %d", total)
+	}
+	if total := resolveQuestionCountForAccount(models.AccountTypePaid, models.TestTypeSKB, 99); total != 30 {
+		t.Fatalf("expected paid SKB to use 30 questions per jabatan, got %d", total)
+	}
+}
+
+func TestValidateAccountTestAccess(t *testing.T) {
+	if err := validateAccountTestAccess(models.AccountTypeFree, models.TestTypeIQ); err != nil {
+		t.Fatalf("expected free account to access IQ, got %v", err)
+	}
+	if err := validateAccountTestAccess(models.AccountTypeFree, models.TestTypeSKB); err == nil {
+		t.Fatal("expected free account to be blocked from SKB")
+	}
+	if err := validateAccountTestAccess(models.AccountTypePaid, models.TestTypeSKB); err != nil {
+		t.Fatalf("expected paid account to access SKB, got %v", err)
+	}
+}

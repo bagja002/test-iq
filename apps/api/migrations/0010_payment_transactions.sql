@@ -1,0 +1,23 @@
+CREATE TABLE payment_transactions (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    order_id VARCHAR(64) NOT NULL,
+    product_code VARCHAR(64) NOT NULL,
+    amount INT NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'INITIATED',
+    snap_token VARCHAR(191) NOT NULL,
+    redirect_url VARCHAR(255) NOT NULL,
+    midtrans_transaction_id VARCHAR(64) NOT NULL DEFAULT '',
+    payment_type VARCHAR(64) NOT NULL DEFAULT '',
+    fraud_status VARCHAR(32) NOT NULL DEFAULT '',
+    transaction_status VARCHAR(32) NOT NULL DEFAULT '',
+    paid_at TIMESTAMP NULL,
+    metadata JSON NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uidx_payment_transactions_order_id (order_id),
+    KEY idx_payment_transactions_user_id (user_id),
+    KEY idx_payment_transactions_status (status),
+    KEY idx_payment_transactions_product_code (product_code),
+    CONSTRAINT fk_payment_transactions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);

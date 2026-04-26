@@ -42,7 +42,8 @@ func New(cfg *config.Config, db *gorm.DB) *fiber.App {
 	authService := services.NewAuthService(db, cfg)
 	testService := services.NewTestService(db)
 	adminService := services.NewAdminService(db)
-	handler := handlers.New(cfg, authService, testService, adminService)
+	paymentService := services.NewPaymentService(db, cfg)
+	handler := handlers.New(cfg, authService, testService, adminService, paymentService)
 
 	api := app.Group("/api/v1")
 	api.Get("/health", handler.Health)
@@ -65,7 +66,13 @@ func New(cfg *config.Config, db *gorm.DB) *fiber.App {
 	authGroup.Post("/refresh", loginLimiter, handler.Refresh)
 	authGroup.Get("/session", handler.Session)
 
+	api.Post("/payments/midtrans/notifications", handler.MidtransNotification)
+
 	api.Get("/test-config/active", middleware.RequireAuth(), handler.GetTestConfig)
+
+	paymentGroup := api.Group("/payments", middleware.RequireAuth())
+	paymentGroup.Post("/pro-upgrade", submitLimiter, handler.CreateProUpgradePayment)
+	paymentGroup.Post("/pro-upgrade/confirm", submitLimiter, handler.ConfirmProUpgradePayment)
 
 	testGroup := api.Group("/test-attempts", middleware.RequireAuth())
 	testGroup.Post("/start", submitLimiter, handler.StartAttempt)
@@ -78,8 +85,10 @@ func New(cfg *config.Config, db *gorm.DB) *fiber.App {
 
 	resultGroup := api.Group("/results", middleware.RequireAuth())
 	resultGroup.Get("/me/latest", handler.LatestResult)
+	resultGroup.Get("/me", handler.ListMyResults)
 
 	adminGroup := api.Group("/admin", middleware.RequireAdmin())
+	adminGroup.Get("/overview", handler.AdminOverview)
 	adminGroup.Get("/questions", handler.ListQuestions)
 	adminGroup.Post("/questions", handler.CreateQuestion)
 	adminGroup.Patch("/questions/:questionId", handler.UpdateQuestion)

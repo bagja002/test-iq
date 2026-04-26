@@ -93,3 +93,25 @@ func TestNormalizeUserStatus(t *testing.T) {
 		t.Fatal("expected invalid status to return an error")
 	}
 }
+
+func TestNormalizeAccountType(t *testing.T) {
+	accountType, err := normalizeAccountType("")
+	if err != nil {
+		t.Fatalf("expected empty account type to default to FREE, got error: %v", err)
+	}
+	if accountType != models.AccountTypeFree {
+		t.Fatalf("expected FREE account type, got %s", accountType)
+	}
+
+	accountType, err = normalizeAccountType(models.AccountTypePaid)
+	if err != nil {
+		t.Fatalf("expected paid account type to be accepted, got error: %v", err)
+	}
+	if accountType != models.AccountTypePaid {
+		t.Fatalf("expected PAID account type, got %s", accountType)
+	}
+
+	if _, err := normalizeAccountType("TRIAL"); err == nil {
+		t.Fatal("expected invalid account type to return an error")
+	}
+}
