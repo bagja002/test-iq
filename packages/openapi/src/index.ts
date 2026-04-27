@@ -3,7 +3,9 @@ export type AttemptStatus = "IN_PROGRESS" | "SUBMITTED" | "EXPIRED"
 export type AttemptSectionStatus = "NOT_STARTED" | "IN_PROGRESS" | "SUBMITTED" | "EXPIRED"
 export type QuestionStatus = "DRAFT" | "PUBLISHED" | "ARCHIVED"
 export type UserStatus = "ACTIVE" | "INACTIVE"
-export type QuestionIndex = "VCI" | "PRI" | "WMI" | "PSI"
+export type AccountType = "FREE" | "PRO" | "MAX"
+export type QuestionIndex = "VCI" | "PRI" | "WMI" | "PSI" | "SKB"
+export type TestType = "IQ" | "SKB"
 
 export interface ApiError {
   message: string
@@ -13,8 +15,11 @@ export interface ApiError {
 export interface SessionUser {
   id: number
   name: string
+  position: string
   email: string
   role: Role
+  status: UserStatus
+  accountType: AccountType
 }
 
 export interface SessionResponse {
@@ -29,6 +34,7 @@ export interface LoginRequest {
 
 export interface RegisterRequest {
   name: string
+  position: string
   email: string
   password: string
 }
@@ -76,10 +82,71 @@ export interface QuestionSummary {
 export interface TestConfigResponse {
   id: number
   title: string
+  testType: TestType
+  roomCode: string | null
+  roomLabel: string | null
   durationMinutes: number
   questionCount: number
   isActive: boolean
   updatedAt: string
+}
+
+export interface AdminQuestionStats {
+  total: number
+  published: number
+  draft: number
+  archived: number
+  visual: number
+}
+
+export interface AdminUserStats {
+  total: number
+  active: number
+  inactive: number
+  adminCount: number
+  participantCount: number
+}
+
+export interface AdminAttemptStats {
+  inProgress: number
+  submitted: number
+  expired: number
+}
+
+export interface AdminResultStats {
+  submissionCount: number
+  averagePercentage: number
+  highestEstimatedIq: number
+}
+
+export interface AdminQuestionHealth {
+  code: QuestionIndex
+  label: string
+  published: number
+  total: number
+}
+
+export interface AdminConfigHealth {
+  id: number
+  title: string
+  testType: TestType
+  roomCode: string | null
+  roomLabel: string | null
+  durationMinutes: number
+  questionCount: number
+  publishedQuestionCount: number
+  canStartAttempt: boolean
+  readinessMessage: string
+  questionHealth: AdminQuestionHealth[]
+}
+
+export interface AdminOverview {
+  questionStats: AdminQuestionStats
+  userStats: AdminUserStats
+  attemptStats: AdminAttemptStats
+  resultStats: AdminResultStats
+  questionHealth: AdminQuestionHealth[]
+  activeConfig: AdminConfigHealth | null
 }
 
 export interface AttemptQuestionOption {
@@ -120,6 +187,9 @@ export interface AttemptSection {
 
 export interface AttemptDetail {
   id: number
+  testType: TestType
+  roomCode: string | null
+  roomLabel: string | null
   status: AttemptStatus
   startedAt: string
   expiresAt: string
@@ -134,6 +204,9 @@ export interface AttemptDetail {
 
 export interface AttemptSummary {
   id: number
+  testType: TestType
+  roomCode: string | null
+  roomLabel: string | null
   status: AttemptStatus
   startedAt: string
   expiresAt: string
@@ -153,8 +226,13 @@ export interface IndexScore {
 
 export interface AttemptResult extends AttemptSummary {
   estimatedIq: number | null
+  skbScore: number | null
   classificationLabel: string | null
   indexScores: IndexScore[]
+}
+
+export interface ResultListResponse {
+  results: AttemptResult[]
 }
 
 export interface SaveAnswersRequest {
@@ -171,9 +249,11 @@ export interface ResultResponse {
 export interface UserSummary {
   id: number
   name: string
+  position: string
   email: string
   role: Role
   status: UserStatus
+  accountType: AccountType
   createdAt: string
 }
 
