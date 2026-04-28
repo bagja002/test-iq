@@ -17,6 +17,7 @@ type Config struct {
 	MidtransServerKey  string
 	MidtransClientKey  string
 	MidtransProduction bool
+	QuestionAssetDir   string
 	AccessTokenTTL     time.Duration
 	RefreshTokenTTL    time.Duration
 	CookieSecure       bool
@@ -44,6 +45,7 @@ func Load() *Config {
 		MidtransServerKey:  getString("MIDTRANS_SERVER_KEY", ""),
 		MidtransClientKey:  getString("MIDTRANS_CLIENT_KEY", ""),
 		MidtransProduction: getBool("MIDTRANS_PRODUCTION", false),
+		QuestionAssetDir:   getString("QUESTION_ASSET_DIR", "storage/question-assets"),
 		AccessTokenTTL:     getDuration("ACCESS_TOKEN_TTL", 30*time.Minute),
 		RefreshTokenTTL:    getDuration("REFRESH_TOKEN_TTL", 7*24*time.Hour),
 		CookieSecure:       getBool("COOKIE_SECURE", false),

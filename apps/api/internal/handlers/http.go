@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +40,16 @@ func (h *Handler) Health(c fiber.Ctx) error {
 		"status": "ok",
 		"time":   time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+func (h *Handler) QuestionAsset(c fiber.Ctx) error {
+	requestPath := strings.TrimPrefix(c.Path(), "/api/v1/question-assets/")
+	assetPath, err := services.NormalizeQuestionAssetPath(requestPath)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, "path asset tidak valid", err.Error())
+	}
+
+	return c.SendFile(filepath.Join(h.cfg.QuestionAssetDir, filepath.FromSlash(assetPath)))
 }
 
 func (h *Handler) Login(c fiber.Ctx) error {
@@ -485,6 +497,67 @@ func (h *Handler) CreateQuestion(c fiber.Ctx) error {
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(question)
+}
+
+func (h *Handler) ImportQuestions(c fiber.Ctx) error {
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, "file import wajib diunggah", err.Error())
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, "file import tidak bisa dibuka", err.Error())
+	}
+	defer file.Close()
+
+	raw, err := io.ReadAll(file)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, "file import tidak bisa dibaca", err.Error())
+	}
+
+	rows, err := services.ParseQuestionImportSpreadsheet(fileHeader.Filename, raw)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
+	}
+
+	result, err := h.admin.ImportQuestions(rows)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusInternalServerError, "gagal import soal", err.Error())
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "import soal selesai",
+		"result":  result,
+	})
+}
+
+func (h *Handler) ImportQuestionAssets(c fiber.Ctx) error {
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, "file ZIP gambar wajib diunggah", err.Error())
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, "file ZIP gambar tidak bisa dibuka", err.Error())
+	}
+	defer file.Close()
+
+	raw, err := io.ReadAll(file)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, "file ZIP gambar tidak bisa dibaca", err.Error())
+	}
+
+	result, err := services.ImportQuestionAssetZip(fileHeader.Filename, raw, h.cfg.QuestionAssetDir)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "import gambar selesai",
+		"result":  result,
+	})
 }
 
 func (h *Handler) UpdateQuestion(c fiber.Ctx) error {

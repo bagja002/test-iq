@@ -266,6 +266,37 @@ func (s *AdminService) CreateQuestion(payload QuestionPayload) (*models.Question
 	return &question, nil
 }
 
+func (s *AdminService) ImportQuestions(rows []QuestionImportRow) (QuestionImportResult, error) {
+	result := QuestionImportResult{
+		TotalRows: len(rows),
+		Errors:    []QuestionImportRowError{},
+	}
+
+	for _, row := range rows {
+		if strings.TrimSpace(row.Error) != "" {
+			result.FailedCount++
+			result.Errors = append(result.Errors, QuestionImportRowError{
+				RowNumber: row.RowNumber,
+				Message:   row.Error,
+			})
+			continue
+		}
+
+		if _, err := s.CreateQuestion(row.Payload); err != nil {
+			result.FailedCount++
+			result.Errors = append(result.Errors, QuestionImportRowError{
+				RowNumber: row.RowNumber,
+				Message:   err.Error(),
+			})
+			continue
+		}
+
+		result.ImportedCount++
+	}
+
+	return result, nil
+}
+
 func (s *AdminService) UpdateQuestion(questionID uint, payload QuestionPayload) (*models.Question, error) {
 	if err := validateQuestionPayload(payload); err != nil {
 		return nil, err

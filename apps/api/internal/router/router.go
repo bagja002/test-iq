@@ -25,7 +25,7 @@ import (
 func New(cfg *config.Config, db *gorm.DB) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:   "Test IQ Ku API",
-		BodyLimit: 2 * 1024 * 1024,
+		BodyLimit: 50 * 1024 * 1024,
 	})
 
 	app.Use(recovermw.New())
@@ -67,6 +67,7 @@ func New(cfg *config.Config, db *gorm.DB) *fiber.App {
 	authGroup.Get("/session", handler.Session)
 
 	api.Post("/payments/midtrans/notifications", handler.MidtransNotification)
+	api.Get("/question-assets/*", handler.QuestionAsset)
 
 	api.Get("/test-config/active", middleware.RequireAuth(), handler.GetTestConfig)
 
@@ -91,6 +92,8 @@ func New(cfg *config.Config, db *gorm.DB) *fiber.App {
 	adminGroup.Get("/overview", handler.AdminOverview)
 	adminGroup.Get("/questions", handler.ListQuestions)
 	adminGroup.Post("/questions", handler.CreateQuestion)
+	adminGroup.Post("/questions/import", handler.ImportQuestions)
+	adminGroup.Post("/question-assets/import", handler.ImportQuestionAssets)
 	adminGroup.Patch("/questions/:questionId", handler.UpdateQuestion)
 	adminGroup.Delete("/questions/:questionId", handler.DeleteQuestion)
 	adminGroup.Get("/users", handler.ListUsers)
