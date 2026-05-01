@@ -72,6 +72,7 @@ func New(cfg *config.Config, db *gorm.DB) *fiber.App {
 	api.Get("/test-config/active", middleware.RequireAuth(), handler.GetTestConfig)
 
 	paymentGroup := api.Group("/payments", middleware.RequireAuth())
+	paymentGroup.Get("/upgrade/plans", handler.ListUpgradePlans)
 	paymentGroup.Post("/upgrade", submitLimiter, handler.CreateUpgradePayment)
 	paymentGroup.Post("/upgrade/confirm", submitLimiter, handler.ConfirmUpgradePayment)
 
@@ -102,6 +103,8 @@ func New(cfg *config.Config, db *gorm.DB) *fiber.App {
 	adminGroup.Get("/results", handler.ListResults)
 	adminGroup.Get("/test-config", handler.GetTestConfig)
 	adminGroup.Patch("/test-config", handler.UpdateTestConfig)
+	adminGroup.Get("/membership-plans", handler.ListUpgradePlans)
+	adminGroup.Patch("/membership-plans", handler.UpdateUpgradePlanPrices)
 
 	return app
 }

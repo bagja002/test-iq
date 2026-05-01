@@ -21,10 +21,12 @@ import (
 )
 
 const (
-	proUpgradeProductCode = "PRO_UPGRADE"
-	maxUpgradeProductCode = "MAX_UPGRADE"
-	proUpgradeAmount      = 400
-	maxUpgradeAmount      = 500
+	proUpgradeProductCode   = "PRO_UPGRADE"
+	maxUpgradeProductCode   = "MAX_UPGRADE"
+	proUpgradeDefaultAmount = 40000
+	maxUpgradeDefaultAmount = 50000
+	proUpgradeSubmitLimit   = 10
+	maxUpgradeSubmitLimit   = 0
 )
 
 type CreateUpgradePaymentResult struct {
@@ -49,6 +51,26 @@ type PaymentStatusResult struct {
 	AccountType       models.AccountType   `json:"accountType"`
 	PaymentStatus     models.PaymentStatus `json:"paymentStatus"`
 	TransactionStatus string               `json:"transactionStatus"`
+}
+
+type UpgradePlanView struct {
+	AccountType       models.AccountType `json:"accountType"`
+	ProductCode       string             `json:"productCode"`
+	Name              string             `json:"name"`
+	Description       string             `json:"description"`
+	Amount            int                `json:"amount"`
+	FormattedPrice    string             `json:"formattedPrice"`
+	SubmitLimitPerDay int                `json:"submitLimitPerDay"`
+	IsActive          bool               `json:"isActive"`
+}
+
+type UpgradePlanPricePayload struct {
+	AccountType models.AccountType `json:"accountType"`
+	Amount      int                `json:"amount"`
+}
+
+type UpdateUpgradePlanPricesInput struct {
+	Plans []UpgradePlanPricePayload `json:"plans"`
 }
 
 type midtransSnapResponse struct {
@@ -92,8 +114,65 @@ func NewPaymentService(db *gorm.DB, cfg *config.Config) *PaymentService {
 	}
 }
 
+func (s *PaymentService) ListUpgradePlans() ([]UpgradePlanView, error) {
+	plans, err := s.listUpgradePlanModels(s.db)
+	if err != nil {
+		return nil, err
+	}
+
+	return serializeUpgradePlans(plans), nil
+}
+
+func (s *PaymentService) UpdateUpgradePlanPrices(input UpdateUpgradePlanPricesInput) ([]UpgradePlanView, error) {
+	if len(input.Plans) == 0 {
+		return nil, errors.New("minimal satu harga paket wajib dikirim")
+	}
+
+	tx := s.db.Begin()
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+
+	if err := s.ensureDefaultUpgradePlans(tx); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	for _, item := range input.Plans {
+		accountType := canonicalAccountType(item.AccountType)
+		if accountType != models.AccountTypePro && accountType != models.AccountTypeMax {
+			tx.Rollback()
+			return nil, errors.New("paket membership tidak valid")
+		}
+		if item.Amount <= 0 {
+			tx.Rollback()
+			return nil, fmt.Errorf("harga %s harus lebih dari 0", accountType)
+		}
+
+		if err := tx.Model(&models.MembershipPlan{}).
+			Where("account_type = ?", accountType).
+			Update("amount", item.Amount).Error; err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+	}
+
+	var plans []models.MembershipPlan
+	if err := tx.Where("account_type IN ?", []models.AccountType{models.AccountTypePro, models.AccountTypeMax}).
+		Find(&plans).Error; err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+
+	return serializeUpgradePlans(orderUpgradePlans(plans)), nil
+}
+
 func (s *PaymentService) CreateUpgradePayment(user models.User, input CreateUpgradePaymentInput) (*CreateUpgradePaymentResult, error) {
-	product, err := resolveUpgradeProduct(input.AccountType)
+	product, err := s.resolveUpgradeProduct(input.AccountType)
 	if err != nil {
 		return nil, err
 	}
@@ -116,14 +195,20 @@ func (s *PaymentService) CreateUpgradePayment(user models.User, input CreateUpgr
 		}).
 		Order("id DESC").
 		First(&existing).Error; err == nil {
-		return &CreateUpgradePaymentResult{
-			OrderID:     existing.OrderID,
-			SnapToken:   existing.SnapToken,
-			RedirectURL: existing.RedirectURL,
-			Amount:      existing.Amount,
-			Status:      string(existing.Status),
-			AccountType: string(product.AccountType),
-		}, nil
+		if existing.Amount != product.Amount {
+			if err := s.db.Model(&existing).Update("status", models.PaymentStatusCanceled).Error; err != nil {
+				return nil, err
+			}
+		} else {
+			return &CreateUpgradePaymentResult{
+				OrderID:     existing.OrderID,
+				SnapToken:   existing.SnapToken,
+				RedirectURL: existing.RedirectURL,
+				Amount:      existing.Amount,
+				Status:      string(existing.Status),
+				AccountType: string(product.AccountType),
+			}, nil
+		}
 	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -287,7 +372,7 @@ func (s *PaymentService) applyMidtransStatus(payload midtransStatusResponse) (*P
 	}
 
 	if nextStatus == models.PaymentStatusPaid {
-		targetAccountType := accountTypeFromProductCode(payment.ProductCode)
+		targetAccountType := s.accountTypeFromProductCode(tx, payment.ProductCode)
 		if canonicalAccountType(user.AccountType) != targetAccountType {
 			user.AccountType = targetAccountType
 		}
@@ -312,30 +397,51 @@ func (s *PaymentService) applyMidtransStatus(payload midtransStatusResponse) (*P
 	}, nil
 }
 
-func resolveUpgradeProduct(accountType models.AccountType) (upgradeProduct, error) {
+func (s *PaymentService) resolveUpgradeProduct(accountType models.AccountType) (upgradeProduct, error) {
 	switch canonicalAccountType(accountType) {
 	case models.AccountTypePro:
-		return upgradeProduct{
-			ProductCode: proUpgradeProductCode,
-			AccountType: models.AccountTypePro,
-			Amount:      proUpgradeAmount,
-			OrderPrefix: "PRO",
-			ItemName:    "Upgrade Akun Pro",
-		}, nil
+		return s.resolveUpgradeProductFromPlan(models.AccountTypePro)
 	case models.AccountTypeMax:
-		return upgradeProduct{
-			ProductCode: maxUpgradeProductCode,
-			AccountType: models.AccountTypeMax,
-			Amount:      maxUpgradeAmount,
-			OrderPrefix: "MAX",
-			ItemName:    "Upgrade Akun Max",
-		}, nil
+		return s.resolveUpgradeProductFromPlan(models.AccountTypeMax)
 	default:
 		return upgradeProduct{}, errors.New("paket upgrade tidak valid")
 	}
 }
 
-func accountTypeFromProductCode(productCode string) models.AccountType {
+func (s *PaymentService) resolveUpgradeProductFromPlan(accountType models.AccountType) (upgradeProduct, error) {
+	if err := s.ensureDefaultUpgradePlans(s.db); err != nil {
+		return upgradeProduct{}, err
+	}
+
+	var plan models.MembershipPlan
+	if err := s.db.Where("account_type = ? AND is_active = ?", accountType, true).First(&plan).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return upgradeProduct{}, errors.New("paket upgrade tidak aktif")
+		}
+		return upgradeProduct{}, err
+	}
+	if plan.Amount <= 0 {
+		return upgradeProduct{}, fmt.Errorf("harga %s belum valid", accountType)
+	}
+
+	return upgradeProduct{
+		ProductCode: plan.ProductCode,
+		AccountType: canonicalAccountType(plan.AccountType),
+		Amount:      plan.Amount,
+		OrderPrefix: strings.TrimSuffix(plan.ProductCode, "_UPGRADE"),
+		ItemName:    plan.Name,
+	}, nil
+}
+
+func (s *PaymentService) accountTypeFromProductCode(tx *gorm.DB, productCode string) models.AccountType {
+	var plan models.MembershipPlan
+	if err := tx.Where("product_code = ?", strings.TrimSpace(productCode)).First(&plan).Error; err == nil {
+		return canonicalAccountType(plan.AccountType)
+	}
+	return fallbackAccountTypeFromProductCode(productCode)
+}
+
+func fallbackAccountTypeFromProductCode(productCode string) models.AccountType {
 	switch strings.TrimSpace(productCode) {
 	case proUpgradeProductCode:
 		return models.AccountTypePro
@@ -344,6 +450,122 @@ func accountTypeFromProductCode(productCode string) models.AccountType {
 	default:
 		return models.AccountTypeFree
 	}
+}
+
+func (s *PaymentService) listUpgradePlanModels(db *gorm.DB) ([]models.MembershipPlan, error) {
+	if err := s.ensureDefaultUpgradePlans(db); err != nil {
+		return nil, err
+	}
+
+	var plans []models.MembershipPlan
+	if err := db.Where("account_type IN ?", []models.AccountType{models.AccountTypePro, models.AccountTypeMax}).
+		Find(&plans).Error; err != nil {
+		return nil, err
+	}
+
+	return orderUpgradePlans(plans), nil
+}
+
+func (s *PaymentService) ensureDefaultUpgradePlans(db *gorm.DB) error {
+	defaults := defaultUpgradePlanModels()
+	for _, item := range defaults {
+		var count int64
+		if err := db.Model(&models.MembershipPlan{}).
+			Where("account_type = ?", item.AccountType).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			continue
+		}
+		if err := db.Create(&item).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func defaultUpgradePlanModels() []models.MembershipPlan {
+	return []models.MembershipPlan{
+		{
+			AccountType:       models.AccountTypePro,
+			ProductCode:       proUpgradeProductCode,
+			Name:              "Paket Pro",
+			Description:       "Semua fitur terbuka dengan batas 10 submit IQ dan 10 submit SKB per hari.",
+			Amount:            proUpgradeDefaultAmount,
+			SubmitLimitPerDay: proUpgradeSubmitLimit,
+			IsActive:          true,
+		},
+		{
+			AccountType:       models.AccountTypeMax,
+			ProductCode:       maxUpgradeProductCode,
+			Name:              "Paket Max",
+			Description:       "Full akses tanpa batas submit harian untuk IQ dan SKB.",
+			Amount:            maxUpgradeDefaultAmount,
+			SubmitLimitPerDay: maxUpgradeSubmitLimit,
+			IsActive:          true,
+		},
+	}
+}
+
+func orderUpgradePlans(plans []models.MembershipPlan) []models.MembershipPlan {
+	byType := make(map[models.AccountType]models.MembershipPlan, len(plans))
+	for _, plan := range plans {
+		byType[canonicalAccountType(plan.AccountType)] = plan
+	}
+
+	ordered := make([]models.MembershipPlan, 0, len(plans))
+	for _, accountType := range []models.AccountType{models.AccountTypePro, models.AccountTypeMax} {
+		if plan, ok := byType[accountType]; ok {
+			ordered = append(ordered, plan)
+		}
+	}
+
+	return ordered
+}
+
+func serializeUpgradePlans(plans []models.MembershipPlan) []UpgradePlanView {
+	response := make([]UpgradePlanView, 0, len(plans))
+	for _, plan := range plans {
+		response = append(response, UpgradePlanView{
+			AccountType:       canonicalAccountType(plan.AccountType),
+			ProductCode:       plan.ProductCode,
+			Name:              plan.Name,
+			Description:       plan.Description,
+			Amount:            plan.Amount,
+			FormattedPrice:    formatRupiah(plan.Amount),
+			SubmitLimitPerDay: plan.SubmitLimitPerDay,
+			IsActive:          plan.IsActive,
+		})
+	}
+	return response
+}
+
+func formatRupiah(amount int) string {
+	if amount < 0 {
+		return "-Rp" + formatThousands(-amount)
+	}
+	return "Rp" + formatThousands(amount)
+}
+
+func formatThousands(value int) string {
+	raw := fmt.Sprintf("%d", value)
+	if len(raw) <= 3 {
+		return raw
+	}
+
+	remainder := len(raw) % 3
+	if remainder == 0 {
+		remainder = 3
+	}
+
+	var builder strings.Builder
+	builder.WriteString(raw[:remainder])
+	for index := remainder; index < len(raw); index += 3 {
+		builder.WriteString(".")
+		builder.WriteString(raw[index : index+3])
+	}
+	return builder.String()
 }
 
 func (s *PaymentService) fetchTransactionStatus(orderID string) (midtransStatusResponse, error) {

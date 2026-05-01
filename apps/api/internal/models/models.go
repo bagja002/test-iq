@@ -224,6 +224,19 @@ type PaymentTransaction struct {
 	UpdatedAt             time.Time      `json:"updatedAt"`
 }
 
+type MembershipPlan struct {
+	ID                uint        `gorm:"primaryKey" json:"id"`
+	AccountType       AccountType `gorm:"size:20;not null;uniqueIndex" json:"accountType"`
+	ProductCode       string      `gorm:"size:64;not null;uniqueIndex" json:"productCode"`
+	Name              string      `gorm:"size:120;not null" json:"name"`
+	Description       string      `gorm:"type:text;not null" json:"description"`
+	Amount            int         `gorm:"not null" json:"amount"`
+	SubmitLimitPerDay int         `gorm:"not null;default:0" json:"submitLimitPerDay"`
+	IsActive          bool        `gorm:"not null;default:true;index" json:"isActive"`
+	CreatedAt         time.Time   `json:"createdAt"`
+	UpdatedAt         time.Time   `json:"updatedAt"`
+}
+
 type OptionSnapshot struct {
 	Key      string `json:"key"`
 	Content  string `json:"content"`

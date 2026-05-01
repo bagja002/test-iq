@@ -135,6 +135,32 @@ func (h *Handler) Session(c fiber.Ctx) error {
 	})
 }
 
+func (h *Handler) ListUpgradePlans(c fiber.Ctx) error {
+	plans, err := h.pay.ListUpgradePlans()
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusInternalServerError, "gagal mengambil harga membership", err.Error())
+	}
+
+	return c.JSON(fiber.Map{"plans": plans})
+}
+
+func (h *Handler) UpdateUpgradePlanPrices(c fiber.Ctx) error {
+	var payload services.UpdateUpgradePlanPricesInput
+	if err := c.Bind().Body(&payload); err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, "payload harga membership tidak valid", err.Error())
+	}
+
+	plans, err := h.pay.UpdateUpgradePlanPrices(payload)
+	if err != nil {
+		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
+	}
+
+	return c.JSON(fiber.Map{
+		"message": "harga membership berhasil disimpan",
+		"plans":   plans,
+	})
+}
+
 func (h *Handler) CreateUpgradePayment(c fiber.Ctx) error {
 	user, _ := middleware.CurrentUser(c)
 	var payload services.CreateUpgradePaymentInput
