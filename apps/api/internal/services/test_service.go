@@ -79,9 +79,8 @@ type TestService struct {
 }
 
 const freeIQQuestionLimit = 2
-const iqQuestionsPerSection = 30
-const iqTotalQuestionCount = iqQuestionsPerSection * 4
-const skbQuestionCountPerAttempt = 30
+const iqTotalQuestionCount = 130
+const skbQuestionCountPerAttempt = 50
 
 func NewTestService(db *gorm.DB) *TestService {
 	return &TestService{db: db}
@@ -124,13 +123,52 @@ func (s *TestService) StartAttempt(user models.User, input StartAttemptInput) (*
 		return nil, err
 	}
 
+	var config models.TestConfig
+	if err := tx.
+		Preload("SectionConfigs", func(db *gorm.DB) *gorm.DB {
+			return db.Order("order_no ASC")
+		}).
+		Where("is_active = ? AND test_type = ? AND room_code IN ?", true, testType, roomCodes).
+		Order("id DESC").
+		First(&config).Error; err != nil {
+		tx.Rollback()
+		return nil, errors.New("belum ada test aktif")
+	}
+	iqSectionRules := iqSectionRulesFromConfig(config)
+
 	var activeAttempt models.Attempt
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("user_id = ? AND test_type = ? AND room_code IN ? AND status = ?", user.ID, testType, roomCodes, models.AttemptStatusInProgress).
 		Order("id DESC").
 		First(&activeAttempt).Error; err == nil {
-		tx.Commit()
-		return &activeAttempt, nil
+		if activeAttempt.TestConfigID != config.ID {
+			if err := tx.Model(&models.Attempt{}).
+				Where("id = ?", activeAttempt.ID).
+				Update("status", models.AttemptStatusExpired).Error; err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+		} else if testType == models.TestTypeIQ {
+			isStale, err := activeAttemptHasStaleIQSection(tx, activeAttempt.ID, iqSectionRules)
+			if err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			if isStale {
+				if err := tx.Model(&models.Attempt{}).
+					Where("id = ?", activeAttempt.ID).
+					Update("status", models.AttemptStatusExpired).Error; err != nil {
+					tx.Rollback()
+					return nil, err
+				}
+			} else {
+				tx.Commit()
+				return &activeAttempt, nil
+			}
+		} else {
+			tx.Commit()
+			return &activeAttempt, nil
+		}
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		tx.Rollback()
 		return nil, err
@@ -139,12 +177,6 @@ func (s *TestService) StartAttempt(user models.User, input StartAttemptInput) (*
 	if err := ensureDailySubmitQuota(tx, user.ID, user.AccountType, testType, now); err != nil {
 		tx.Rollback()
 		return nil, err
-	}
-
-	var config models.TestConfig
-	if err := tx.Where("is_active = ? AND test_type = ? AND room_code IN ?", true, testType, roomCodes).Order("id DESC").First(&config).Error; err != nil {
-		tx.Rollback()
-		return nil, errors.New("belum ada test aktif")
 	}
 
 	effectiveQuestionCount := resolveQuestionCountForAccount(user.AccountType, config.TestType, config.QuestionCount)
@@ -156,7 +188,9 @@ func (s *TestService) StartAttempt(user models.User, input StartAttemptInput) (*
 
 	var availabilityRows []availabilityRow
 	questions := make([]models.Question, 0, config.QuestionCount)
+	sectionDurationByIndex := map[models.QuestionIndex]int{}
 	if config.TestType == models.TestTypeSKB {
+		sectionDurationByIndex[models.QuestionIndexSKB] = config.DurationMinutes
 		var chunk []models.Question
 		if err := tx.Preload("Options").
 			Where("status = ? AND question_index = ? AND subtest_code = ?", models.QuestionStatusPublished, models.QuestionIndexSKB, config.RoomCode).
@@ -167,9 +201,9 @@ func (s *TestService) StartAttempt(user models.User, input StartAttemptInput) (*
 			return nil, err
 		}
 
-		if len(chunk) < effectiveQuestionCount {
+		if len(chunk) == 0 {
 			tx.Rollback()
-			return nil, errors.New("jumlah soal SKB published belum mencukupi untuk kamar ini")
+			return nil, errors.New("belum ada soal SKB published untuk kamar ini")
 		}
 		questions = append(questions, chunk...)
 	} else {
@@ -187,10 +221,21 @@ func (s *TestService) StartAttempt(user models.User, input StartAttemptInput) (*
 			available[row.QuestionIndex] = row.Total
 		}
 
-		selectionPlan, err := buildQuestionSelectionPlan(effectiveQuestionCount, available)
+		var selectionPlan []QuestionSelectionPlanRow
+		var err error
+		if canonicalAccountType(user.AccountType) == models.AccountTypeFree {
+			selectionPlan, err = buildQuestionSelectionPlan(effectiveQuestionCount, available)
+		} else {
+			selectionPlan, err = buildIQQuestionSelectionPlan(iqSectionRules, available)
+		}
 		if err != nil {
 			tx.Rollback()
 			return nil, err
+		}
+		for _, item := range selectionPlan {
+			if item.DurationMinutes > 0 {
+				sectionDurationByIndex[item.Code] = item.DurationMinutes
+			}
 		}
 
 		for _, item := range selectionPlan {
@@ -215,6 +260,26 @@ func (s *TestService) StartAttempt(user models.User, input StartAttemptInput) (*
 
 	sortQuestionsForAttempt(questions)
 
+	attemptDurationMinutes := config.DurationMinutes
+	if config.TestType == models.TestTypeIQ {
+		attemptDurationMinutes = 0
+		seenSections := map[models.QuestionIndex]bool{}
+		for _, question := range questions {
+			if seenSections[question.QuestionIndex] {
+				continue
+			}
+			seenSections[question.QuestionIndex] = true
+			duration := sectionDurationByIndex[question.QuestionIndex]
+			if duration <= 0 {
+				duration = 1
+			}
+			attemptDurationMinutes += duration
+		}
+		if attemptDurationMinutes <= 0 {
+			attemptDurationMinutes = config.DurationMinutes
+		}
+	}
+
 	attempt := models.Attempt{
 		UserID:          user.ID,
 		TestConfigID:    config.ID,
@@ -223,9 +288,9 @@ func (s *TestService) StartAttempt(user models.User, input StartAttemptInput) (*
 		RoomLabel:       config.RoomLabel,
 		Status:          models.AttemptStatusInProgress,
 		StartedAt:       now,
-		ExpiresAt:       now.Add(time.Duration(config.DurationMinutes) * time.Minute),
+		ExpiresAt:       now.Add(time.Duration(attemptDurationMinutes) * time.Minute),
 		TotalQuestions:  len(questions),
-		DurationMinutes: config.DurationMinutes,
+		DurationMinutes: attemptDurationMinutes,
 	}
 
 	if err := tx.Create(&attempt).Error; err != nil {
@@ -274,7 +339,7 @@ func (s *TestService) StartAttempt(user models.User, input StartAttemptInput) (*
 		return nil, err
 	}
 
-	attemptSections := buildAttemptSectionRecordsFromQuestions(attempt.ID, questions, config.DurationMinutes, config.TestType)
+	attemptSections := buildAttemptSectionRecordsFromQuestions(attempt.ID, questions, attemptDurationMinutes, config.TestType, sectionDurationByIndex)
 	if len(attemptSections) == 0 {
 		tx.Rollback()
 		return nil, errors.New("gagal membentuk bagian test")
@@ -976,6 +1041,50 @@ func expireAttempts(db *gorm.DB, userID uint, testType models.TestType, roomCode
 		Update("status", models.AttemptStatusExpired).Error
 }
 
+func activeAttemptHasStaleIQSection(db *gorm.DB, attemptID uint, rules []IQSectionRule) (bool, error) {
+	ruleByCode := make(map[models.QuestionIndex]IQSectionRule, len(rules))
+	for _, rule := range rules {
+		ruleByCode[rule.Code] = rule
+	}
+
+	var sections []models.AttemptSection
+	if err := db.
+		Where("attempt_id = ? AND question_index <> ?", attemptID, models.QuestionIndexSKB).
+		Find(&sections).Error; err != nil {
+		return false, err
+	}
+	for _, section := range sections {
+		rule, ok := ruleByCode[section.QuestionIndex]
+		if !ok {
+			return true, nil
+		}
+		if section.QuestionCount > rule.QuestionCount || section.DurationMinutes != rule.DurationMinutes {
+			return true, nil
+		}
+	}
+
+	type row struct {
+		QuestionIndex models.QuestionIndex
+		Total         int
+	}
+	var rows []row
+	if err := db.Model(&models.AttemptQuestion{}).
+		Select("question_index, COUNT(*) as total").
+		Where("attempt_id = ? AND question_index <> ?", attemptID, models.QuestionIndexSKB).
+		Group("question_index").
+		Scan(&rows).Error; err != nil {
+		return false, err
+	}
+	for _, item := range rows {
+		rule, ok := ruleByCode[item.QuestionIndex]
+		if !ok || item.Total > rule.QuestionCount {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 func (s *TestService) loadAttemptQuestionsAndAnswers(attemptID uint) ([]models.AttemptQuestion, []models.AttemptAnswer, error) {
 	var questions []models.AttemptQuestion
 	if err := s.db.Where("attempt_id = ?", attemptID).Order("order_no ASC").Find(&questions).Error; err != nil {
@@ -1017,8 +1126,14 @@ func resolveQuestionCountForAccount(accountType models.AccountType, testType mod
 
 	switch testType {
 	case models.TestTypeIQ:
+		if configuredQuestionCount > 0 {
+			return configuredQuestionCount
+		}
 		return iqTotalQuestionCount
 	case models.TestTypeSKB:
+		if configuredQuestionCount > 0 {
+			return configuredQuestionCount
+		}
 		return skbQuestionCountPerAttempt
 	default:
 		return configuredQuestionCount
@@ -1072,9 +1187,10 @@ func ensureAttemptAllowedForUser(tx *gorm.DB, userID uint, testType models.TestT
 }
 
 type attemptSectionSeed struct {
-	Code          models.QuestionIndex
-	OrderNo       int
-	QuestionCount int
+	Code            models.QuestionIndex
+	OrderNo         int
+	QuestionCount   int
+	DurationMinutes int
 }
 
 func buildAttemptQuestionViews(questions []models.AttemptQuestion, answerMap map[uint]string) ([]AttemptQuestionView, error) {
@@ -1188,12 +1304,14 @@ func buildAttemptSectionRecordsFromQuestions(
 	questions []models.Question,
 	durationMinutes int,
 	testType models.TestType,
+	sectionDurationByIndex map[models.QuestionIndex]int,
 ) []models.AttemptSection {
 	if testType == models.TestTypeSKB {
 		return buildAttemptSectionRecords(attemptID, []attemptSectionSeed{{
-			Code:          models.QuestionIndexSKB,
-			OrderNo:       1,
-			QuestionCount: len(questions),
+			Code:            models.QuestionIndexSKB,
+			OrderNo:         1,
+			QuestionCount:   len(questions),
+			DurationMinutes: durationMinutes,
 		}}, durationMinutes)
 	}
 
@@ -1201,9 +1319,10 @@ func buildAttemptSectionRecordsFromQuestions(
 	for _, question := range questions {
 		if len(seeds) == 0 || seeds[len(seeds)-1].Code != question.QuestionIndex {
 			seeds = append(seeds, attemptSectionSeed{
-				Code:          question.QuestionIndex,
-				OrderNo:       len(seeds) + 1,
-				QuestionCount: 1,
+				Code:            question.QuestionIndex,
+				OrderNo:         len(seeds) + 1,
+				QuestionCount:   1,
+				DurationMinutes: sectionDurationByIndex[question.QuestionIndex],
 			})
 			continue
 		}
@@ -1221,9 +1340,10 @@ func buildAttemptSectionRecordsFromAttemptQuestions(
 ) []models.AttemptSection {
 	if len(questions) > 0 && questions[0].QuestionIndex == models.QuestionIndexSKB {
 		return buildAttemptSectionRecords(attemptID, []attemptSectionSeed{{
-			Code:          models.QuestionIndexSKB,
-			OrderNo:       1,
-			QuestionCount: len(questions),
+			Code:            models.QuestionIndexSKB,
+			OrderNo:         1,
+			QuestionCount:   len(questions),
+			DurationMinutes: durationMinutes,
 		}}, durationMinutes)
 	}
 
@@ -1252,12 +1372,16 @@ func buildAttemptSectionRecords(
 	durations := distributeSectionDurations(durationMinutes, len(seeds))
 	records := make([]models.AttemptSection, 0, len(seeds))
 	for index, seed := range seeds {
+		durationMinutes := seed.DurationMinutes
+		if durationMinutes <= 0 {
+			durationMinutes = durations[index]
+		}
 		records = append(records, models.AttemptSection{
 			AttemptID:       attemptID,
 			QuestionIndex:   seed.Code,
 			OrderNo:         seed.OrderNo,
 			Status:          models.AttemptSectionStatusNotStarted,
-			DurationMinutes: durations[index],
+			DurationMinutes: durationMinutes,
 			QuestionCount:   seed.QuestionCount,
 		})
 	}

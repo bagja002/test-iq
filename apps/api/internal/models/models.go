@@ -110,16 +110,29 @@ type QuestionOption struct {
 }
 
 type TestConfig struct {
-	ID              uint      `gorm:"primaryKey" json:"id"`
-	Title           string    `gorm:"size:191;not null" json:"title"`
-	TestType        TestType  `gorm:"size:20;not null;default:'IQ';index:idx_test_config_type_room,priority:1" json:"testType"`
-	RoomCode        string    `gorm:"size:64;not null;default:'';index:idx_test_config_type_room,priority:2" json:"roomCode"`
-	RoomLabel       string    `gorm:"size:191;not null;default:''" json:"roomLabel"`
-	DurationMinutes int       `gorm:"not null" json:"durationMinutes"`
-	QuestionCount   int       `gorm:"not null" json:"questionCount"`
-	IsActive        bool      `gorm:"not null;default:true;index" json:"isActive"`
+	ID              uint     `gorm:"primaryKey" json:"id"`
+	Title           string   `gorm:"size:191;not null" json:"title"`
+	TestType        TestType `gorm:"size:20;not null;default:'IQ';index:idx_test_config_type_room,priority:1" json:"testType"`
+	RoomCode        string   `gorm:"size:64;not null;default:'';index:idx_test_config_type_room,priority:2" json:"roomCode"`
+	RoomLabel       string   `gorm:"size:191;not null;default:''" json:"roomLabel"`
+	DurationMinutes int      `gorm:"not null" json:"durationMinutes"`
+	QuestionCount   int      `gorm:"not null" json:"questionCount"`
+	IsActive        bool     `gorm:"not null;default:true;index" json:"isActive"`
+	SectionConfigs  []TestSectionConfig
 	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
+}
+
+type TestSectionConfig struct {
+	ID              uint          `gorm:"primaryKey" json:"id"`
+	TestConfigID    uint          `gorm:"not null;uniqueIndex:uidx_test_section_config,priority:1;index" json:"testConfigId"`
+	QuestionIndex   QuestionIndex `gorm:"size:16;not null;uniqueIndex:uidx_test_section_config,priority:2" json:"questionIndex"`
+	Label           string        `gorm:"size:191;not null;default:''" json:"label"`
+	OrderNo         int           `gorm:"not null" json:"orderNo"`
+	DurationMinutes int           `gorm:"not null" json:"durationMinutes"`
+	QuestionCount   int           `gorm:"not null" json:"questionCount"`
+	CreatedAt       time.Time     `json:"createdAt"`
+	UpdatedAt       time.Time     `json:"updatedAt"`
 }
 
 type Attempt struct {

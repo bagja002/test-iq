@@ -465,6 +465,17 @@ func (h *Handler) ListQuestions(c fiber.Ctx) error {
 			subtestLabel = services.GetSubtestLabel(question.SubtestCode)
 		}
 
+		options := make([]fiber.Map, 0, len(question.Options))
+		for _, option := range question.Options {
+			options = append(options, fiber.Map{
+				"key":       option.Key,
+				"content":   option.Content,
+				"mediaUrl":  nullableString(option.MediaURL),
+				"mediaAlt":  nullableString(option.MediaAlt),
+				"isCorrect": option.IsCorrect,
+			})
+		}
+
 		rows = append(rows, fiber.Map{
 			"id":                 question.ID,
 			"prompt":             question.Prompt,
@@ -478,6 +489,7 @@ func (h *Handler) ListQuestions(c fiber.Ctx) error {
 			"status":             question.Status,
 			"hasOptionMedia":     mediaCounts[question.ID] > 0,
 			"optionCount":        counts[question.ID],
+			"options":            options,
 			"updatedAt":          question.UpdatedAt.UTC().Format(time.RFC3339),
 		})
 	}
@@ -722,7 +734,7 @@ func (h *Handler) UpdateTestConfig(c fiber.Ctx) error {
 		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
 	}
 
-	return c.JSON(config)
+	return c.JSON(serializeTestConfig(*config))
 }
 
 func (h *Handler) setAuthCookies(c fiber.Ctx, accessToken string, refreshToken string) {
@@ -843,6 +855,17 @@ func serializeAdminConfigHealth(config *services.AdminConfigHealth) any {
 		return nil
 	}
 
+	sections := make([]fiber.Map, 0, len(config.Sections))
+	for _, section := range config.Sections {
+		sections = append(sections, fiber.Map{
+			"questionIndex":   section.QuestionIndex,
+			"label":           section.Label,
+			"orderNo":         section.OrderNo,
+			"durationMinutes": section.DurationMinutes,
+			"questionCount":   section.QuestionCount,
+		})
+	}
+
 	return fiber.Map{
 		"id":                     config.ID,
 		"title":                  config.Title,
@@ -855,6 +878,7 @@ func serializeAdminConfigHealth(config *services.AdminConfigHealth) any {
 		"canStartAttempt":        config.CanStartAttempt,
 		"readinessMessage":       config.ReadinessMessage,
 		"questionHealth":         serializeAdminQuestionHealth(config.QuestionHealth),
+		"sections":               sections,
 	}
 }
 
@@ -875,6 +899,17 @@ func serializeAttemptSection(section models.AttemptSection, answeredCount int) f
 }
 
 func serializeTestConfig(config models.TestConfig) fiber.Map {
+	sections := make([]fiber.Map, 0, len(config.SectionConfigs))
+	for _, section := range config.SectionConfigs {
+		sections = append(sections, fiber.Map{
+			"questionIndex":   section.QuestionIndex,
+			"label":           section.Label,
+			"orderNo":         section.OrderNo,
+			"durationMinutes": section.DurationMinutes,
+			"questionCount":   section.QuestionCount,
+		})
+	}
+
 	return fiber.Map{
 		"id":              config.ID,
 		"title":           config.Title,
@@ -883,6 +918,7 @@ func serializeTestConfig(config models.TestConfig) fiber.Map {
 		"roomLabel":       nullableString(config.RoomLabel),
 		"durationMinutes": config.DurationMinutes,
 		"questionCount":   config.QuestionCount,
+		"sections":        sections,
 		"isActive":        config.IsActive,
 		"updatedAt":       config.UpdatedAt.UTC().Format(time.RFC3339),
 	}

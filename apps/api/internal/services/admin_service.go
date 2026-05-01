@@ -40,13 +40,22 @@ type UserUpdatePayload struct {
 }
 
 type TestConfigPayload struct {
-	Title           string `json:"title"`
-	TestType        string `json:"testType"`
-	RoomCode        string `json:"roomCode"`
-	RoomLabel       string `json:"roomLabel"`
-	DurationMinutes int    `json:"durationMinutes"`
-	QuestionCount   int    `json:"questionCount"`
-	Active          bool   `json:"active"`
+	Title           string                     `json:"title"`
+	TestType        string                     `json:"testType"`
+	RoomCode        string                     `json:"roomCode"`
+	RoomLabel       string                     `json:"roomLabel"`
+	DurationMinutes int                        `json:"durationMinutes"`
+	QuestionCount   int                        `json:"questionCount"`
+	Active          bool                       `json:"active"`
+	Sections        []TestSectionConfigPayload `json:"sections"`
+}
+
+type TestSectionConfigPayload struct {
+	QuestionIndex   models.QuestionIndex `json:"questionIndex"`
+	Label           string               `json:"label"`
+	OrderNo         int                  `json:"orderNo"`
+	DurationMinutes int                  `json:"durationMinutes"`
+	QuestionCount   int                  `json:"questionCount"`
 }
 
 type AdminOverview struct {
@@ -93,6 +102,14 @@ type AdminQuestionHealthRow struct {
 	Total     int64                `json:"total"`
 }
 
+type AdminSectionConfigRow struct {
+	QuestionIndex   models.QuestionIndex `json:"questionIndex"`
+	Label           string               `json:"label"`
+	OrderNo         int                  `json:"orderNo"`
+	DurationMinutes int                  `json:"durationMinutes"`
+	QuestionCount   int                  `json:"questionCount"`
+}
+
 type AdminConfigHealth struct {
 	ID                     uint                     `json:"id"`
 	Title                  string                   `json:"title"`
@@ -105,6 +122,7 @@ type AdminConfigHealth struct {
 	CanStartAttempt        bool                     `json:"canStartAttempt"`
 	ReadinessMessage       string                   `json:"readinessMessage"`
 	QuestionHealth         []AdminQuestionHealthRow `json:"questionHealth"`
+	Sections               []AdminSectionConfigRow  `json:"sections"`
 }
 
 type AdminResultRow struct {
@@ -151,6 +169,9 @@ func (s *AdminService) ListQuestions(search string, status string, questionIndex
 	}
 
 	if err := query.
+		Preload("Options", func(db *gorm.DB) *gorm.DB {
+			return db.Order("`key` ASC")
+		}).
 		Order("status = 'PUBLISHED' DESC").
 		Order("updated_at DESC").
 		Limit(limit).
@@ -514,7 +535,11 @@ func (s *AdminService) GetActiveTestConfig(testType models.TestType, roomCode st
 
 func (s *AdminService) ListActiveTestConfigs(testType models.TestType, roomCode string) ([]models.TestConfig, error) {
 	var configs []models.TestConfig
-	query := s.db.Where("is_active = ?", true)
+	query := s.db.
+		Preload("SectionConfigs", func(db *gorm.DB) *gorm.DB {
+			return db.Order("order_no ASC")
+		}).
+		Where("is_active = ?", true)
 	if testType != "" {
 		query = query.Where("test_type = ?", testType)
 	}
@@ -573,8 +598,8 @@ func (s *AdminService) GetOverview() (*AdminOverview, error) {
 }
 
 func (s *AdminService) UpsertTestConfig(payload TestConfigPayload) (*models.TestConfig, error) {
-	if strings.TrimSpace(payload.Title) == "" || payload.DurationMinutes <= 0 || payload.QuestionCount <= 0 {
-		return nil, errors.New("title, durasi, dan jumlah soal harus valid")
+	if strings.TrimSpace(payload.Title) == "" {
+		return nil, errors.New("title konfigurasi wajib diisi")
 	}
 	testType, err := NormalizeTestType(models.TestType(payload.TestType))
 	if err != nil {
@@ -600,11 +625,20 @@ func (s *AdminService) UpsertTestConfig(payload TestConfigPayload) (*models.Test
 		}
 	}
 
-	if testType == models.TestTypeIQ && payload.QuestionCount < len(orderedQuestionIndices) {
-		return nil, errors.New("jumlah soal minimal harus mencakup seluruh 4 index utama")
+	var iqSectionRules []IQSectionRule
+	if testType == models.TestTypeIQ {
+		var err error
+		iqSectionRules, err = normalizeIQSectionPayloads(payload.Sections)
+		if err != nil {
+			return nil, err
+		}
+		payload.QuestionCount = totalIQSectionQuestionCount(iqSectionRules)
+		payload.DurationMinutes = totalIQSectionDurationMinutes(iqSectionRules)
 	}
-	if testType == models.TestTypeSKB && payload.QuestionCount < 1 {
-		return nil, errors.New("jumlah soal SKB minimal 1")
+	if testType == models.TestTypeSKB {
+		if payload.DurationMinutes <= 0 || payload.QuestionCount < 1 {
+			return nil, errors.New("durasi dan jumlah soal SKB harus lebih dari 0")
+		}
 	}
 
 	tx := s.db.Begin()
@@ -632,6 +666,26 @@ func (s *AdminService) UpsertTestConfig(payload TestConfigPayload) (*models.Test
 	if err := tx.Create(&config).Error; err != nil {
 		tx.Rollback()
 		return nil, err
+	}
+
+	if testType == models.TestTypeIQ {
+		sections := make([]models.TestSectionConfig, 0, len(iqSectionRules))
+		for _, rule := range iqSectionRules {
+			sections = append(sections, models.TestSectionConfig{
+				TestConfigID:    config.ID,
+				QuestionIndex:   rule.Code,
+				Label:           rule.Label,
+				OrderNo:         rule.OrderNo,
+				DurationMinutes: rule.DurationMinutes,
+				QuestionCount:   rule.QuestionCount,
+			})
+		}
+
+		if err := tx.Create(&sections).Error; err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		config.SectionConfigs = sections
 	}
 
 	if err := tx.Commit().Error; err != nil {
@@ -902,12 +956,24 @@ func buildAdminConfigHealth(
 
 	var err error
 	effectiveQuestionCount := resolveQuestionCountForAccount(models.AccountTypeMax, config.TestType, config.QuestionCount)
+	sections := []AdminSectionConfigRow{}
 	if config.TestType == models.TestTypeSKB {
-		if available[models.QuestionIndexSKB] < effectiveQuestionCount {
-			err = errors.New("bank soal SKB untuk kamar ini belum mencukupi")
+		if available[models.QuestionIndexSKB] == 0 {
+			err = errors.New("bank soal SKB untuk kamar ini belum memiliki soal published")
 		}
 	} else {
-		_, err = buildQuestionSelectionPlan(effectiveQuestionCount, available)
+		rules := iqSectionRulesFromConfig(config)
+		sections = make([]AdminSectionConfigRow, 0, len(rules))
+		for _, rule := range rules {
+			sections = append(sections, AdminSectionConfigRow{
+				QuestionIndex:   rule.Code,
+				Label:           rule.Label,
+				OrderNo:         rule.OrderNo,
+				DurationMinutes: rule.DurationMinutes,
+				QuestionCount:   rule.QuestionCount,
+			})
+		}
+		_, err = buildIQQuestionSelectionPlan(rules, available)
 	}
 	canStartAttempt := err == nil
 	readinessMessage := "Konfigurasi aktif siap dipakai untuk attempt baru."
@@ -927,5 +993,6 @@ func buildAdminConfigHealth(
 		CanStartAttempt:        canStartAttempt,
 		ReadinessMessage:       readinessMessage,
 		QuestionHealth:         questionHealth,
+		Sections:               sections,
 	}
 }

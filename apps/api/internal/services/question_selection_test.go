@@ -69,3 +69,63 @@ func TestBuildQuestionSelectionPlanSupportsPreviewQuestionCounts(t *testing.T) {
 		t.Fatalf("unexpected second preview row: %+v", plan[1])
 	}
 }
+
+func TestBuildQuestionSelectionPlanUsesConfiguredQuestionsPerIQIndex(t *testing.T) {
+	plan, err := buildQuestionSelectionPlan(130, map[models.QuestionIndex]int{
+		models.QuestionIndexVCI: 80,
+		models.QuestionIndexPRI: 30,
+		models.QuestionIndexWMI: 75,
+		models.QuestionIndexPSI: 45,
+	})
+	if err != nil {
+		t.Fatalf("expected full IQ plan to be valid, got %v", err)
+	}
+
+	expected := map[models.QuestionIndex]int{
+		models.QuestionIndexVCI: 50,
+		models.QuestionIndexPRI: 20,
+		models.QuestionIndexWMI: 40,
+		models.QuestionIndexPSI: 20,
+	}
+	for _, row := range plan {
+		if row.Requested != expected[row.Code] {
+			t.Fatalf("expected %s to request %d questions, got %d", row.Code, expected[row.Code], row.Requested)
+		}
+	}
+}
+
+func TestBuildQuestionSelectionPlanCapsFullIQAtAvailableQuestionsPerIndex(t *testing.T) {
+	plan, err := buildQuestionSelectionPlan(130, map[models.QuestionIndex]int{
+		models.QuestionIndexVCI: 50,
+		models.QuestionIndexPRI: 1,
+		models.QuestionIndexWMI: 49,
+		models.QuestionIndexPSI: 20,
+	})
+	if err != nil {
+		t.Fatalf("expected full IQ plan to use available questions without dummy fill, got %v", err)
+	}
+
+	expected := map[models.QuestionIndex]int{
+		models.QuestionIndexVCI: 50,
+		models.QuestionIndexPRI: 1,
+		models.QuestionIndexWMI: 40,
+		models.QuestionIndexPSI: 20,
+	}
+	for _, row := range plan {
+		if row.Requested != expected[row.Code] {
+			t.Fatalf("expected %s to request %d questions, got %d", row.Code, expected[row.Code], row.Requested)
+		}
+	}
+}
+
+func TestBuildQuestionSelectionPlanAllowsFullIQWithOnlyOneIndexAvailable(t *testing.T) {
+	plan, err := buildQuestionSelectionPlan(130, map[models.QuestionIndex]int{
+		models.QuestionIndexVCI: 10,
+	})
+	if err != nil {
+		t.Fatalf("expected full IQ plan to use the 10 available questions, got %v", err)
+	}
+	if len(plan) != 1 || plan[0].Code != models.QuestionIndexVCI || plan[0].Requested != 10 {
+		t.Fatalf("unexpected plan for partial bank soal: %+v", plan)
+	}
+}
