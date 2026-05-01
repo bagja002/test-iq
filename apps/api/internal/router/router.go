@@ -67,12 +67,12 @@ func New(cfg *config.Config, db *gorm.DB) *fiber.App {
 	authGroup.Get("/session", handler.Session)
 
 	api.Post("/payments/midtrans/notifications", handler.MidtransNotification)
+	api.Get("/payments/upgrade/plans", handler.ListUpgradePlans)
 	api.Get("/question-assets/*", handler.QuestionAsset)
 
 	api.Get("/test-config/active", middleware.RequireAuth(), handler.GetTestConfig)
 
 	paymentGroup := api.Group("/payments", middleware.RequireAuth())
-	paymentGroup.Get("/upgrade/plans", handler.ListUpgradePlans)
 	paymentGroup.Post("/upgrade", submitLimiter, handler.CreateUpgradePayment)
 	paymentGroup.Post("/upgrade/confirm", submitLimiter, handler.ConfirmUpgradePayment)
 
