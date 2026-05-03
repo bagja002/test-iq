@@ -78,7 +78,6 @@ type TestService struct {
 	db *gorm.DB
 }
 
-const freeIQQuestionLimit = 2
 const iqTotalQuestionCount = 130
 const skbQuestionCountPerAttempt = 50
 
@@ -178,6 +177,10 @@ func (s *TestService) StartAttempt(user models.User, input StartAttemptInput) (*
 		tx.Rollback()
 		return nil, err
 	}
+	if err := ensureFreeIQAttemptQuota(tx, user.ID, user.AccountType, testType); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 
 	effectiveQuestionCount := resolveQuestionCountForAccount(user.AccountType, config.TestType, config.QuestionCount)
 
@@ -221,13 +224,7 @@ func (s *TestService) StartAttempt(user models.User, input StartAttemptInput) (*
 			available[row.QuestionIndex] = row.Total
 		}
 
-		var selectionPlan []QuestionSelectionPlanRow
-		var err error
-		if canonicalAccountType(user.AccountType) == models.AccountTypeFree {
-			selectionPlan, err = buildQuestionSelectionPlan(effectiveQuestionCount, available)
-		} else {
-			selectionPlan, err = buildIQQuestionSelectionPlan(iqSectionRules, available)
-		}
+		selectionPlan, err := buildIQQuestionSelectionPlan(iqSectionRules, available)
 		if err != nil {
 			tx.Rollback()
 			return nil, err
@@ -1117,13 +1114,6 @@ func validateAccountTestAccess(accountType models.AccountType, testType models.T
 }
 
 func resolveQuestionCountForAccount(accountType models.AccountType, testType models.TestType, configuredQuestionCount int) int {
-	if canonicalAccountType(accountType) == models.AccountTypeFree && testType == models.TestTypeIQ {
-		if configuredQuestionCount > 0 && configuredQuestionCount < freeIQQuestionLimit {
-			return configuredQuestionCount
-		}
-		return freeIQQuestionLimit
-	}
-
 	switch testType {
 	case models.TestTypeIQ:
 		if configuredQuestionCount > 0 {
@@ -1155,6 +1145,23 @@ func ensureDailySubmitQuota(tx *gorm.DB, userID uint, accountType models.Account
 	}
 	if submittedCount >= int64(limit) {
 		return fmt.Errorf("batas submit harian untuk %s sudah tercapai (%d kali)", testType, limit)
+	}
+	return nil
+}
+
+func ensureFreeIQAttemptQuota(tx *gorm.DB, userID uint, accountType models.AccountType, testType models.TestType) error {
+	if canonicalAccountType(accountType) != models.AccountTypeFree || testType != models.TestTypeIQ {
+		return nil
+	}
+
+	var attemptCount int64
+	if err := tx.Model(&models.Attempt{}).
+		Where("user_id = ? AND test_type = ?", userID, models.TestTypeIQ).
+		Count(&attemptCount).Error; err != nil {
+		return err
+	}
+	if attemptCount > 0 {
+		return errors.New("akun gratis hanya bisa mengerjakan full test IQ satu kali")
 	}
 	return nil
 }

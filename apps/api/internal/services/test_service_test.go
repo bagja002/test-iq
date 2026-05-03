@@ -209,8 +209,8 @@ func TestBuildAttemptSectionRecordsFromAttemptQuestions(t *testing.T) {
 }
 
 func TestResolveQuestionCountForAccount(t *testing.T) {
-	if total := resolveQuestionCountForAccount(models.AccountTypeFree, models.TestTypeIQ, 20); total != 2 {
-		t.Fatalf("expected free IQ to be capped at 2, got %d", total)
+	if total := resolveQuestionCountForAccount(models.AccountTypeFree, models.TestTypeIQ, 20); total != 20 {
+		t.Fatalf("expected free IQ to use configured full test count, got %d", total)
 	}
 	if total := resolveQuestionCountForAccount(models.AccountTypeMax, models.TestTypeIQ, 130); total != 130 {
 		t.Fatalf("expected paid IQ to use configured question count, got %d", total)
