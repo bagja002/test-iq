@@ -17,6 +17,12 @@ type Config struct {
 	MidtransServerKey  string
 	MidtransClientKey  string
 	MidtransProduction bool
+	SMTPHost           string
+	SMTPPort           int
+	SMTPUsername       string
+	SMTPAppPassword    string
+	EmailFrom          string
+	EmailFromName      string
 	QuestionAssetDir   string
 	AccessTokenTTL     time.Duration
 	RefreshTokenTTL    time.Duration
@@ -45,6 +51,12 @@ func Load() *Config {
 		MidtransServerKey:  getString("MIDTRANS_SERVER_KEY", ""),
 		MidtransClientKey:  getString("MIDTRANS_CLIENT_KEY", ""),
 		MidtransProduction: getBool("MIDTRANS_PRODUCTION", false),
+		SMTPHost:           getString("SMTP_HOST", ""),
+		SMTPPort:           getInt("SMTP_PORT", 587),
+		SMTPUsername:       getString("SMTP_USERNAME", ""),
+		SMTPAppPassword:    getString("SMTP_APP_PASSWORD", ""),
+		EmailFrom:          getString("EMAIL_FROM", ""),
+		EmailFromName:      getString("EMAIL_FROM_NAME", "Try Out KNMP dan KDMP"),
 		QuestionAssetDir:   getString("QUESTION_ASSET_DIR", "storage/question-assets"),
 		AccessTokenTTL:     getDuration("ACCESS_TOKEN_TTL", 30*time.Minute),
 		RefreshTokenTTL:    getDuration("REFRESH_TOKEN_TTL", 7*24*time.Hour),

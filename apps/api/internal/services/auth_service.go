@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -58,8 +59,8 @@ func (s *AuthService) Login(email string, password string, userAgent string) (*m
 	return &user, accessToken, refreshToken, nil
 }
 
-func (s *AuthService) Register(name string, position string, email string, password string) (*models.User, string, string, error) {
-	normalizedName, normalizedPosition, normalizedEmail, err := validatePublicRegistration(name, position, email, password)
+func (s *AuthService) Register(name string, position string, phone string, email string, password string) (*models.User, string, string, error) {
+	normalizedName, normalizedPosition, normalizedPhone, normalizedEmail, err := validatePublicRegistration(name, position, phone, email, password)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -77,6 +78,7 @@ func (s *AuthService) Register(name string, position string, email string, passw
 	user := models.User{
 		Name:         normalizedName,
 		Position:     normalizedPosition,
+		Phone:        normalizedPhone,
 		Email:        normalizedEmail,
 		PasswordHash: passwordHash,
 		Role:         models.RoleUser,
@@ -97,6 +99,10 @@ func (s *AuthService) Register(name string, position string, email string, passw
 
 	if err := tx.Commit().Error; err != nil {
 		return nil, "", "", err
+	}
+
+	if err := s.sendRegistrationCommunityEmail(user); err != nil {
+		log.Printf("registration email failed for user %d: %v", user.ID, err)
 	}
 
 	return &user, accessToken, refreshToken, nil

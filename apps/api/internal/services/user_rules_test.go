@@ -7,7 +7,7 @@ import (
 )
 
 func TestValidatePublicRegistration(t *testing.T) {
-	name, position, email, err := validatePublicRegistration("  Siti   Aminah  ", " Pengelola   Koperasi ", " Siti@example.com ", "password123")
+	name, position, phone, email, err := validatePublicRegistration("  Siti   Aminah  ", " Pengelola   Koperasi ", "0812-3456-7890", " Siti@example.com ", "password123")
 	if err != nil {
 		t.Fatalf("expected registration payload to be valid, got error: %v", err)
 	}
@@ -23,6 +23,10 @@ func TestValidatePublicRegistration(t *testing.T) {
 	if position != "Pengelola Koperasi" {
 		t.Fatalf("expected normalized position to be %q, got %q", "Pengelola Koperasi", position)
 	}
+
+	if phone != "081234567890" {
+		t.Fatalf("expected normalized phone to be %q, got %q", "081234567890", phone)
+	}
 }
 
 func TestValidatePublicRegistrationRejectsInvalidPayload(t *testing.T) {
@@ -30,6 +34,7 @@ func TestValidatePublicRegistrationRejectsInvalidPayload(t *testing.T) {
 		name        string
 		inputName   string
 		inputPos    string
+		inputPhone  string
 		inputEmail  string
 		inputPass   string
 		expectError string
@@ -38,6 +43,7 @@ func TestValidatePublicRegistrationRejectsInvalidPayload(t *testing.T) {
 			name:        "missing name",
 			inputName:   "",
 			inputPos:    "Staff Koperasi",
+			inputPhone:  "081234567890",
 			inputEmail:  "user@example.com",
 			inputPass:   "password123",
 			expectError: "nama wajib diisi",
@@ -46,14 +52,34 @@ func TestValidatePublicRegistrationRejectsInvalidPayload(t *testing.T) {
 			name:        "missing position",
 			inputName:   "Budi",
 			inputPos:    "",
+			inputPhone:  "081234567890",
 			inputEmail:  "user@example.com",
 			inputPass:   "password123",
 			expectError: "jabatan wajib diisi",
 		},
 		{
+			name:        "missing phone",
+			inputName:   "Budi",
+			inputPos:    "Staff Koperasi",
+			inputPhone:  "",
+			inputEmail:  "user@example.com",
+			inputPass:   "password123",
+			expectError: "nomor HP wajib diisi",
+		},
+		{
+			name:        "invalid phone",
+			inputName:   "Budi",
+			inputPos:    "Staff Koperasi",
+			inputPhone:  "nomorhp",
+			inputEmail:  "user@example.com",
+			inputPass:   "password123",
+			expectError: "format nomor HP tidak valid",
+		},
+		{
 			name:        "invalid email",
 			inputName:   "Budi",
 			inputPos:    "Staff Koperasi",
+			inputPhone:  "081234567890",
 			inputEmail:  "not-an-email",
 			inputPass:   "password123",
 			expectError: "format email tidak valid",
@@ -62,6 +88,7 @@ func TestValidatePublicRegistrationRejectsInvalidPayload(t *testing.T) {
 			name:        "weak password",
 			inputName:   "Budi",
 			inputPos:    "Staff Koperasi",
+			inputPhone:  "081234567890",
 			inputEmail:  "budi@example.com",
 			inputPass:   "1234567",
 			expectError: "password minimal 8 karakter",
@@ -70,7 +97,7 @@ func TestValidatePublicRegistrationRejectsInvalidPayload(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, _, err := validatePublicRegistration(tc.inputName, tc.inputPos, tc.inputEmail, tc.inputPass)
+			_, _, _, _, err := validatePublicRegistration(tc.inputName, tc.inputPos, tc.inputPhone, tc.inputEmail, tc.inputPass)
 			if err == nil || err.Error() != tc.expectError {
 				t.Fatalf("expected error %q, got %v", tc.expectError, err)
 			}

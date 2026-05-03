@@ -24,6 +24,7 @@ type QuestionPayload struct {
 type UserPayload struct {
 	Name        string             `json:"name"`
 	Position    string             `json:"position"`
+	Phone       string             `json:"phone"`
 	Email       string             `json:"email"`
 	Password    string             `json:"password"`
 	Role        models.Role        `json:"role"`
@@ -34,6 +35,7 @@ type UserPayload struct {
 type UserUpdatePayload struct {
 	Name        *string             `json:"name"`
 	Position    *string             `json:"position"`
+	Phone       *string             `json:"phone"`
 	Role        *models.Role        `json:"role"`
 	Status      *models.UserStatus  `json:"status"`
 	AccountType *models.AccountType `json:"accountType"`
@@ -388,7 +390,7 @@ func (s *AdminService) ListUsers(search string, role string, status string, limi
 	var users []models.User
 	query := s.db.Model(&models.User{})
 	if trimmed := strings.TrimSpace(search); trimmed != "" {
-		query = query.Where("name LIKE ? OR email LIKE ?", "%"+trimmed+"%", "%"+trimmed+"%")
+		query = query.Where("name LIKE ? OR email LIKE ? OR phone LIKE ?", "%"+trimmed+"%", "%"+trimmed+"%", "%"+trimmed+"%")
 	}
 	if trimmed := strings.TrimSpace(role); trimmed != "" {
 		query = query.Where("role = ?", strings.ToUpper(trimmed))
@@ -403,7 +405,7 @@ func (s *AdminService) ListUsers(search string, role string, status string, limi
 }
 
 func (s *AdminService) CreateUser(payload UserPayload) (*models.User, error) {
-	normalizedName, normalizedPosition, normalizedEmail, err := validatePublicRegistration(payload.Name, payload.Position, payload.Email, payload.Password)
+	normalizedName, normalizedPosition, normalizedPhone, normalizedEmail, err := validatePublicRegistration(payload.Name, payload.Position, payload.Phone, payload.Email, payload.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -431,6 +433,7 @@ func (s *AdminService) CreateUser(payload UserPayload) (*models.User, error) {
 	user := models.User{
 		Name:         normalizedName,
 		Position:     normalizedPosition,
+		Phone:        normalizedPhone,
 		Email:        normalizedEmail,
 		PasswordHash: passwordHash,
 		Role:         role,
@@ -464,6 +467,16 @@ func (s *AdminService) UpdateUser(userID uint, payload UserUpdatePayload) (*mode
 			return nil, errors.New("jabatan wajib diisi")
 		}
 		user.Position = normalizedPosition
+	}
+	if payload.Phone != nil {
+		normalizedPhone := normalizePhone(*payload.Phone)
+		if normalizedPhone == "" {
+			return nil, errors.New("nomor HP wajib diisi")
+		}
+		if !isValidPhone(normalizedPhone) {
+			return nil, errors.New("format nomor HP tidak valid")
+		}
+		user.Phone = normalizedPhone
 	}
 	if payload.Role != nil {
 		role, err := normalizeRole(*payload.Role)

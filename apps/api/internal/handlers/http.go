@@ -79,6 +79,7 @@ func (h *Handler) Register(c fiber.Ctx) error {
 	var payload struct {
 		Name     string `json:"name"`
 		Position string `json:"position"`
+		Phone    string `json:"phone"`
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
@@ -87,7 +88,7 @@ func (h *Handler) Register(c fiber.Ctx) error {
 		return utils.RespondError(c, fiber.StatusBadRequest, "payload register tidak valid", err.Error())
 	}
 
-	user, accessToken, refreshToken, err := h.auth.Register(payload.Name, payload.Position, payload.Email, payload.Password)
+	user, accessToken, refreshToken, err := h.auth.Register(payload.Name, payload.Position, payload.Phone, payload.Email, payload.Password)
 	if err != nil {
 		return utils.RespondError(c, fiber.StatusBadRequest, err.Error(), "")
 	}
@@ -646,6 +647,7 @@ func (h *Handler) ListUsers(c fiber.Ctx) error {
 			"id":          user.ID,
 			"name":        user.Name,
 			"position":    user.Position,
+			"phone":       user.Phone,
 			"email":       user.Email,
 			"role":        user.Role,
 			"status":      user.Status,
@@ -814,6 +816,7 @@ func serializeUser(user models.User) fiber.Map {
 		"id":          user.ID,
 		"name":        user.Name,
 		"position":    user.Position,
+		"phone":       user.Phone,
 		"email":       user.Email,
 		"role":        user.Role,
 		"status":      user.Status,

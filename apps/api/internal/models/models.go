@@ -63,6 +63,7 @@ type User struct {
 	ID           uint        `gorm:"primaryKey" json:"id"`
 	Name         string      `gorm:"size:120;not null" json:"name"`
 	Position     string      `gorm:"size:191;not null;default:''" json:"position"`
+	Phone        string      `gorm:"size:32;not null;default:''" json:"phone"`
 	Email        string      `gorm:"size:191;not null;uniqueIndex" json:"email"`
 	PasswordHash string      `gorm:"size:255;not null" json:"-"`
 	Role         Role        `gorm:"size:20;not null;index" json:"role"`

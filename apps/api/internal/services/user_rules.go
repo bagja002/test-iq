@@ -22,41 +22,75 @@ func normalizePosition(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
 
-func validatePublicRegistration(name string, position string, email string, password string) (string, string, string, error) {
+func normalizePhone(value string) string {
+	trimmed := strings.TrimSpace(value)
+	replacer := strings.NewReplacer(" ", "", "-", "", "(", "", ")", "")
+	return replacer.Replace(trimmed)
+}
+
+func validatePublicRegistration(name string, position string, phone string, email string, password string) (string, string, string, string, error) {
 	normalizedName := normalizeName(name)
 	normalizedPosition := normalizePosition(position)
+	normalizedPhone := normalizePhone(phone)
 	normalizedEmail := normalizeEmail(email)
 
 	if normalizedName == "" {
-		return "", "", "", errors.New("nama wajib diisi")
+		return "", "", "", "", errors.New("nama wajib diisi")
 	}
 
 	if len(normalizedName) < 3 {
-		return "", "", "", errors.New("nama minimal 3 karakter")
+		return "", "", "", "", errors.New("nama minimal 3 karakter")
 	}
 
 	if normalizedPosition == "" {
-		return "", "", "", errors.New("jabatan wajib diisi")
+		return "", "", "", "", errors.New("jabatan wajib diisi")
 	}
 
 	if len(normalizedPosition) < 3 {
-		return "", "", "", errors.New("jabatan minimal 3 karakter")
+		return "", "", "", "", errors.New("jabatan minimal 3 karakter")
+	}
+
+	if normalizedPhone == "" {
+		return "", "", "", "", errors.New("nomor HP wajib diisi")
+	}
+
+	if !isValidPhone(normalizedPhone) {
+		return "", "", "", "", errors.New("format nomor HP tidak valid")
 	}
 
 	if normalizedEmail == "" {
-		return "", "", "", errors.New("email wajib diisi")
+		return "", "", "", "", errors.New("email wajib diisi")
 	}
 
 	parsedAddress, err := mail.ParseAddress(normalizedEmail)
 	if err != nil || parsedAddress.Address != normalizedEmail {
-		return "", "", "", errors.New("format email tidak valid")
+		return "", "", "", "", errors.New("format email tidak valid")
 	}
 
 	if len(strings.TrimSpace(password)) < 8 {
-		return "", "", "", errors.New("password minimal 8 karakter")
+		return "", "", "", "", errors.New("password minimal 8 karakter")
 	}
 
-	return normalizedName, normalizedPosition, normalizedEmail, nil
+	return normalizedName, normalizedPosition, normalizedPhone, normalizedEmail, nil
+}
+
+func isValidPhone(value string) bool {
+	digits := value
+	if strings.HasPrefix(digits, "+") {
+		digits = strings.TrimPrefix(digits, "+")
+	}
+
+	if len(digits) < 8 || len(digits) > 15 {
+		return false
+	}
+
+	for _, char := range digits {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+
+	return true
 }
 
 func normalizeRole(role models.Role) (models.Role, error) {
