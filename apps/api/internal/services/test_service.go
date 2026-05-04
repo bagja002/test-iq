@@ -26,6 +26,7 @@ type AttemptQuestionView struct {
 	PromptMediaAlt     string                  `json:"promptMediaAlt"`
 	Options            []models.OptionSnapshot `json:"options"`
 	SelectedOptionKey  *string                 `json:"selectedOptionKey"`
+	CorrectOptionKey   *string                 `json:"correctOptionKey"`
 }
 
 type AttemptSectionView struct {
@@ -432,7 +433,7 @@ func (s *TestService) GetAttemptDetail(requester models.User, attemptID uint) (*
 		answerMap[answer.AttemptQuestionID] = answer.SelectedOptionKey
 	}
 
-	items, err := buildAttemptQuestionViews(questions, answerMap)
+	items, err := buildAttemptQuestionViews(questions, answerMap, attempt.Status == models.AttemptStatusSubmitted)
 	if err != nil {
 		tx.Rollback()
 		return nil, err
@@ -1200,7 +1201,7 @@ type attemptSectionSeed struct {
 	DurationMinutes int
 }
 
-func buildAttemptQuestionViews(questions []models.AttemptQuestion, answerMap map[uint]string) ([]AttemptQuestionView, error) {
+func buildAttemptQuestionViews(questions []models.AttemptQuestion, answerMap map[uint]string, revealCorrectAnswers bool) ([]AttemptQuestionView, error) {
 	items := make([]AttemptQuestionView, 0, len(questions))
 	for _, question := range questions {
 		options, err := models.UnmarshalOptionsSnapshot(question.OptionsSnapshot)
@@ -1212,6 +1213,11 @@ func buildAttemptQuestionViews(questions []models.AttemptQuestion, answerMap map
 		if value, ok := answerMap[question.ID]; ok {
 			copyValue := value
 			selected = &copyValue
+		}
+		var correct *string
+		if revealCorrectAnswers {
+			copyValue := question.CorrectOptionKey
+			correct = &copyValue
 		}
 
 		items = append(items, AttemptQuestionView{
@@ -1227,6 +1233,7 @@ func buildAttemptQuestionViews(questions []models.AttemptQuestion, answerMap map
 			PromptMediaAlt:     question.PromptMediaAlt,
 			Options:            options,
 			SelectedOptionKey:  selected,
+			CorrectOptionKey:   correct,
 		})
 	}
 
