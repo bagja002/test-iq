@@ -45,6 +45,7 @@ services:
       REFRESH_TOKEN_TTL: 168h
       COOKIE_SECURE: "false"
       COOKIE_DOMAIN: ""
+      QUESTION_ASSET_DIR: /app/storage/question-assets
       AUTO_RUN_MIGRATIONS: "true"
       SEED_DEMO_DATA: "true"
       RATE_LIMIT_MAX: "20"
@@ -57,6 +58,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    volumes:
+      - api-storage:/app/storage
 
   web:
     build:
@@ -89,3 +92,4 @@ services:
 volumes:
   mysql-data:
   redis-data:
+  api-storage:

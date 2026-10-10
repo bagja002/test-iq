@@ -16,6 +16,7 @@ export interface SessionUser {
   id: number
   name: string
   position: string
+  phone: string
   email: string
   role: Role
   status: UserStatus
@@ -35,6 +36,7 @@ export interface LoginRequest {
 export interface RegisterRequest {
   name: string
   position: string
+  phone: string
   email: string
   password: string
 }
@@ -169,6 +171,7 @@ export interface AttemptQuestion {
   promptMediaAlt: string
   options: AttemptQuestionOption[]
   selectedOptionKey: string | null
+  correctOptionKey: string | null
 }
 
 export interface AttemptSection {
@@ -250,6 +253,7 @@ export interface UserSummary {
   id: number
   name: string
   position: string
+  phone: string
   email: string
   role: Role
   status: UserStatus
